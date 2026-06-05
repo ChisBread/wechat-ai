@@ -1,0 +1,25 @@
+# WeChat-AI Bot Python deps (Python 3.12 venv)
+mss
+Pillow
+ultralytics
+onnxruntime
+rapidocr
+fastmcp
+paho-mqtt
+protobuf
+lxml
+xmltodict
+zstandard
+aiohttp
+aiofiles
+cryptography
+fuzzywuzzy
+python-Levenshtein
+watchfiles
+ruamel.yaml
+pydantic
+pyjwt
+openai
+boto3
+minio
+pyperclip

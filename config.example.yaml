@@ -1,0 +1,95 @@
+# WeChat-AI Bot Configuration
+
+# WeChat user identity (MVP: fill in manually)
+wechat_user:
+  account: ""
+  nickname: ""
+
+# AES image decryption keys (auto-detected if empty)
+aes_xor_key: ""
+
+# MCP Server configuration
+mcp:
+  host: 0.0.0.0
+  port: 8000
+
+# MQTT configuration (for remote command forwarding, empty = disabled)
+mqtt:
+  host: ""
+  port: 1883
+  username: weixin
+  password: ""
+  client_id: wechat_ai_linux
+
+# DingTalk notifications (optional, for status alerts on crash/re-login)
+dingtalk:
+  webhook_url: ""
+
+# Logging
+logging:
+  path: /config/logs
+  level: INFO
+  backup_count: 5
+  max_size: 10485760
+
+# RPA settings
+rpa:
+  action_delay: 0.3
+  scroll_delay: 1
+  max_retries: 3
+  switch_contact_delay: 0.3
+  timeout: 30
+  window_margin: 20
+  window_show_delay: 1.5
+  side_bar_delay: 3
+  ocr:
+    min_confidence: 0.5
+    merge_threshold: 5.0
+    use_remote: false
+    remote_url: http://example.com/ocr
+  # Token bucket rate limiting
+  short_term_rate: 0.15
+  short_term_capacity: 2
+  long_term_rate: 0.25
+  long_term_capacity: 10
+  # UI element offsets (relative to window)
+  room_action_offset:
+    - 0
+    - -30
+  search_contact_offset:
+    - 0
+    - 40
+
+# Visual message reading
+visual_message:
+  poll_interval: 2.0
+  max_message_age: 300
+  dedup_cache_size: 100
+
+# Plugins
+plugins:
+  self-msg-plugin:
+    enabled: true
+  block-empty-room-plugin:
+    enabled: true
+    priority: 2000
+
+# OpenAI / LLM configuration (for AI reply plugins)
+openai:
+  api_key: ""
+  base_url: https://api.openai.com/v1
+  model: gpt-4o
+  prompt: "你是一个聊天机器人，请根据用户的问题给出回答。历史对话：{{chat_history}} 当前时间：{{time_now}} 你的昵称：{{self_nickname}} 群昵称：{{room_nickname}} 消息来自于：{{contact_nickname}}"
+
+# S3 / R2 storage (optional, for QR code uploads on re-login)
+s3:
+  endpoint_url: ""
+  access_key: ""
+  secret_key: ""
+  region: apac
+  bucket: weixin-login-qr
+  public_url_prefix: ""
+
+# WeChat GF decryption API (future)
+wxgf:
+  api_url: ""

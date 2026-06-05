@@ -1,0 +1,33 @@
+---
+services:
+  wechat-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: wechat-ai:latest
+    container_name: wechat-ai
+    hostname: wechat-ai
+    privileged: true
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - TZ=${TZ:-Asia/Shanghai}
+      - KEYBOARD=${KEYBOARD:-en-us-qwerty}
+      - SUBFOLDER=/
+      - TITLE=WeChat-AI
+      - AUTO_START_WECHAT=${AUTO_START_WECHAT:-true}
+      - BOT_ENABLED=${BOT_ENABLED:-true}
+      - BOT_CONFIG_PATH=/config/config.yaml
+      - MCP_PORT=${MCP_PORT:-8000}
+    volumes:
+      - ./config:/config
+      - ./plugins:/plugins:ro
+      - /dev/input:/dev/input:ro
+    devices:
+      - /dev/dri:/dev/dri
+    ports:
+      - "${HTTP_PORT:-3000}:3000"
+      - "${HTTPS_PORT:-3001}:3001"
+      - "${MCP_PORT:-8000}:8000"
+    restart: unless-stopped
+    shm_size: "${SHM_SIZE:-2gb}"

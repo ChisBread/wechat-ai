@@ -1,0 +1,66 @@
+# wechat-ai-bot/pyproject.toml
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wechat-ai-bot"
+version = "0.1.0"
+authors = [
+  { name="wechat-ai", email="dev@wechat-ai.local" },
+]
+description = "AI Bot for WeChat Linux running in Docker with Selkies WebRTC"
+readme = "README.md"
+requires-python = ">=3.12,<4.0"
+license = "MIT"
+license-files = ["LICENSE"]
+
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: POSIX :: Linux",
+]
+
+dependencies = [
+    "pyautogui==0.9.54",
+    "ultralytics==8.3.161",
+    "fastmcp==2.10.1",
+    "paho-mqtt==2.1.0",
+    "protobuf==6.31.1",
+    "aiohttp==3.12.13",
+    "aiofiles>=25.1.0",
+    "cryptography>=46.0.0",
+    "lxml==6.0.0",
+    "minio==7.2.15",
+    "mss==10.0.0",
+    "fuzzywuzzy==0.18.0",
+    "xmltodict==0.14.2",
+    "zstandard==0.23.0",
+    "rapidocr==3.2.0",
+    "python-Levenshtein==0.27.1",
+    "watchfiles==1.1.0",
+    "onnxruntime==1.22.0",
+    "ruamel.yaml==0.18.14",
+    "pydantic==2.11.7",
+    "pyjwt==2.10.1",
+    "openai==1.93.0",
+    "boto3==1.39.3",
+    "pyperclip==1.8.2",
+    "python-xlib==0.33",
+    "Pillow>=10.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/wechat-ai/wechat-ai"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+"wechat_ai_bot.yolo.models" = ["*.pt"]
+
+# ===================================================================
+# Core plugin entry points
+# ===================================================================
+[project.entry-points."wechat_ai.plugins"]
+self-msg-plugin = "wechat_ai_bot.plugins.core.self_msg_plugin:SelfMsgPlugin"
+block-empty-room-plugin = "wechat_ai_bot.plugins.core.block_empty_room_plugin:BlockEmptyRoomPlugin"
