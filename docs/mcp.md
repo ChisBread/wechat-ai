@@ -11,11 +11,12 @@ MCP Server 能读取聊天记录并提交微信 RPA 动作，只适合作为内�
 ## 推荐 Agent 工作流
 
 1. 调用 `get_runtime_status`，确认数据库、RPA、微信窗口可用。
-2. 调用 `search_contacts`，解析精确联系人或群聊。
-3. 调用 `get_recent_messages`、`query_wechat_msg` 或 `get_chat_summary_context`，读取必要上下文。
-4. 发消息前先调用 `send_text_msg` 并设置 `dry_run=true`。
-5. 把解析到的目标和即将发送的文本展示给人类确认。
-6. 人类明确确认后，再调用 `send_text_msg` 发送。
+2. 如果窗口状态异常，调用 `reset_wechat_window` 修正微信窗口尺寸和布局。
+3. 调用 `search_contacts` 或 `get_contact_detail`，解析精确联系人或群聊。
+4. 调用 `get_recent_messages`、`search_text_messages` 或 `get_chat_summary_context`，读取必要上下文。
+5. 发消息前先调用 `send_text_msg` 并设置 `dry_run=true`。
+6. 把解析到的目标和即将发送的文本展示给人类确认。
+7. 人类明确确认后，再调用 `send_text_msg` 发送。
 
 `leave_room`、`public_room_announcement` 这类群操作必须要求用户明确提出该操作，不能由 Agent 自行推断执行。
 
@@ -82,12 +83,18 @@ OpenClaw 或类似支持 MCP JSON 配置的客户端可使用 Streamable HTTP：
 | `get_timestamp` | 当前 Unix 毫秒时间戳 |
 | `get_runtime_status` | bot、RPA、数据库、队列、YOLO、dashboard 状态 |
 | `get_wechat_user_info` | 当前微信身份信息，敏感字段脱敏 |
+| `get_database_status` | 数据库发现、key、联系人、消息表状态 |
+| `refresh_database` | 重新扫描数据库、key、联系人和消息表 |
+| `get_wechat_window_status` | 微信窗口尺寸、布局和 YOLO/RPA 对齐状态 |
+| `reset_wechat_window` | 将微信窗口恢复到 RPA/YOLO 期望尺寸 |
+| `set_message_polling` | 暂停或恢复数据库消息监听 |
 
 ### 联系人和会话
 
 | 工具 | 用途 |
 | --- | --- |
 | `search_contacts` | 按微信 ID、备注、昵称、alias 模糊搜索联系人/群聊 |
+| `get_contact_detail` | 解析单个联系人/群聊并返回详细状态 |
 | `get_recent_chats` | 按最近消息时间列出有消息表的会话 |
 | `query_room_member_list` | 从数据库读取群成员列表 |
 
@@ -96,14 +103,16 @@ OpenClaw 或类似支持 MCP JSON 配置的客户端可使用 Streamable HTTP：
 | 工具 | 用途 |
 | --- | --- |
 | `query_wechat_msg` | 按联系人、关键词、时间范围查询文本历史 |
-| `get_recent_messages` | 获取最近消息，文本直接返回，媒体消息返回类型摘要 |
+| `search_text_messages` | 结构化查询文本历史，返回联系人、时间和消息列表 |
+| `get_recent_messages` | 获取最近消息；`parse_media=true` 时尝试解析媒体路径 |
+| `get_recent_media_messages` | 获取最近图片、视频、文件等非文本消息，并尽量返回本地路径 |
 | `get_chat_summary_context` | 返回适合 LLM 上下文窗口的紧凑聊天行 |
 
 ### 已移植写操作
 
 | 工具 | 用途 | 注意 |
 | --- | --- | --- |
-| `send_text_msg` | 文本消息入 RPA 队列 | 发送前先用 `dry_run=true` |
+| `send_text_msg` | 文本消息入 RPA 队列并可等待执行结果 | 发送前先用 `dry_run=true` |
 | `public_room_announcement` | 群公告入 RPA 队列 | 需要账号有群管理权限 |
 | `leave_room` | 退群操作入 RPA 队列 | 破坏性操作，必须人工确认 |
 
@@ -154,7 +163,29 @@ OpenClaw 或类似支持 MCP JSON 配置的客户端可使用 Streamable HTTP：
   "tool": "send_text_msg",
   "arguments": {
     "recipient_name": "张三",
-    "message": "我稍后回复你。"
+    "message": "我稍后回复你。",
+    "wait_seconds": 12
+  }
+}
+```
+
+重置微信窗口尺寸：
+
+```json
+{
+  "tool": "reset_wechat_window",
+  "arguments": {}
+}
+```
+
+查询媒体消息：
+
+```json
+{
+  "tool": "get_recent_media_messages",
+  "arguments": {
+    "contact_name": "文件传输助手",
+    "limit": 10
   }
 }
 ```

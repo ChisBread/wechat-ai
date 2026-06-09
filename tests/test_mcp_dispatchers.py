@@ -1,5 +1,6 @@
 import unittest
 from queue import Queue
+from threading import Thread
 
 from wechat_ai_bot.mcp.dispatchers import QueueCommandDispatcher, UnavailableCommandDispatcher
 from wechat_ai_bot.models import UserInfo
@@ -81,6 +82,53 @@ class QueueCommandDispatcherTest(unittest.TestCase):
         self.assertEqual(action.target, "Room")
         self.assertEqual(action.action_type, RPAActionType.LEAVE_ROOM)
 
+    def test_dispatch_wait_returns_execution_result(self):
+        bot = DummyBot()
+        dispatcher = QueueCommandDispatcher(bot, UserInfo(account="me"))
+
+        def worker():
+            action = bot.rpa_task_queue.get(timeout=1)
+            action.result_queue.put({"ok": True, "action_type": action.action_type.value})
+
+        thread = Thread(target=worker)
+        thread.start()
+        result = dispatcher.dispatch_wait(
+            "msg/me/rpa_action",
+            {
+                "local_type": MessageType.Text,
+                "message_content": "hello",
+                "nickname": "Alice",
+                "is_chatroom": False,
+                "at_list": [],
+            },
+            timeout=1,
+        )
+        thread.join(timeout=1)
+
+        self.assertEqual(result["status"], "executed")
+        self.assertTrue(result["completed"])
+        self.assertEqual(result["result"]["action_type"], RPAActionType.SEND_TEXT_MESSAGE.value)
+
+    def test_dispatch_wait_can_queue_without_waiting(self):
+        bot = DummyBot()
+        dispatcher = QueueCommandDispatcher(bot, UserInfo(account="me"))
+
+        result = dispatcher.dispatch_wait(
+            "msg/me/rpa_action",
+            {
+                "local_type": MessageType.Text,
+                "message_content": "hello",
+                "nickname": "Alice",
+                "is_chatroom": False,
+                "at_list": [],
+            },
+            timeout=0,
+        )
+
+        self.assertEqual(result["status"], "queued")
+        self.assertFalse(result["completed"])
+        self.assertFalse(bot.rpa_task_queue.empty())
+
     def test_unported_actions_raise_clear_errors(self):
         dispatcher = QueueCommandDispatcher(DummyBot(), UserInfo(account="me"))
 
@@ -94,6 +142,8 @@ class QueueCommandDispatcherTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ConnectionError, "missing dispatcher"):
             dispatcher.dispatch("topic", {})
+        with self.assertRaisesRegex(ConnectionError, "missing dispatcher"):
+            dispatcher.dispatch_wait("topic", {}, timeout=1)
         with self.assertRaisesRegex(ConnectionError, "missing dispatcher"):
             dispatcher.dispatch_rpa("action", {})
 

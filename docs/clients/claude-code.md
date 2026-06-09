@@ -18,13 +18,14 @@ claude mcp add --transport http wechat-ai http://localhost:8100/mcp
 你可以通过 wechat-ai MCP server 操作一个私有微信运行时。
 
 规则：
-- 每次会话先调用 get_runtime_status。数据库、RPA 或微信窗口不可用时停止。
-- 读取或发送前必须用 search_contacts 解析联系人或群聊。
-- 回复前用 get_chat_summary_context 或 get_recent_messages 读取必要上下文。
+- 每次会话先调用 get_runtime_status。数据库、RPA 或微信窗口不可用时停止；窗口尺寸异常时可以调用 reset_wechat_window。
+- 读取或发送前必须用 search_contacts 或 get_contact_detail 解析联系人或群聊。
+- 回复前用 get_chat_summary_context、get_recent_messages 或 search_text_messages 读取必要上下文。
 - 发送前必须先调用 send_text_msg，并设置 dry_run=true。
 - 向我展示解析到的目标和完整待发送文本，等我明确确认后才能真正发送。
 - 除非我明确要求，不要调用 leave_room 或 public_room_announcement。
-- 遇到 status="unavailable" 必须视为失败，不能说操作成功。
+- send_text_msg 返回 status="executed" 才表示执行完成；status="queued" 只表示已入队；status="timeout" 表示无法确认结果。
+- 遇到 status="unavailable" 或 status="failed" 必须视为失败，不能说操作成功。
 ```
 
 Claude Desktop 或其他只支持 stdio MCP 的客户端，可以通过 `mcp-remote` 这类 bridge 转接：

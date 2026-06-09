@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from queue import Empty, Queue
 from typing import TYPE_CHECKING, Any, Dict
 
 from wechat_ai_bot.models import UserInfo
@@ -30,6 +31,44 @@ class QueueCommandDispatcher:
         """Translate a message payload into a local RPA action."""
         action = self._message_action(payload)
         self._queue_action(action)
+
+    def dispatch_wait(
+        self,
+        topic: str,
+        payload: Dict[str, Any],
+        timeout: float = 0,
+    ) -> Dict[str, Any]:
+        """Dispatch a message and optionally wait for local RPA execution status."""
+        action = self._message_action(payload)
+        result_queue = Queue(maxsize=1) if timeout and timeout > 0 else None
+        if result_queue is not None and hasattr(action, "result_queue"):
+            action.result_queue = result_queue
+        self._queue_action(action)
+        response: Dict[str, Any] = {
+            "status": "queued",
+            "queued": True,
+            "completed": False,
+            "dispatcher": type(self).__name__,
+            "action_type": getattr(getattr(action, "action_type", None), "value", ""),
+            "queue_size": self._queue_size(),
+        }
+        if result_queue is None:
+            return response
+        try:
+            result = result_queue.get(timeout=max(0.0, float(timeout)))
+        except Empty:
+            response["status"] = "timeout"
+            response["timeout_seconds"] = timeout
+            return response
+        ok = bool(result.get("ok"))
+        response.update(
+            {
+                "status": "executed" if ok else "failed",
+                "completed": True,
+                "result": result,
+            }
+        )
+        return response
 
     def dispatch_rpa(self, action_type: str, action_data: Dict[str, Any]) -> str:
         """Translate an RPA payload into a local RPA action."""
@@ -84,6 +123,15 @@ class QueueCommandDispatcher:
             raise RuntimeError("RPA task queue is unavailable.")
         queue.put(action)
 
+    def _queue_size(self) -> int:
+        queue = getattr(self.bot, "rpa_task_queue", None)
+        if queue is None:
+            return -1
+        try:
+            return int(queue.qsize())
+        except Exception:
+            return -1
+
 
 class UnavailableCommandDispatcher:
     """Dispatcher used when neither local bot nor MQTT forwarding is available."""
@@ -92,6 +140,14 @@ class UnavailableCommandDispatcher:
         self.reason = reason
 
     def dispatch(self, topic: str, payload: Dict[str, Any]) -> None:
+        raise ConnectionError(self.reason)
+
+    def dispatch_wait(
+        self,
+        topic: str,
+        payload: Dict[str, Any],
+        timeout: float = 0,
+    ) -> Dict[str, Any]:
         raise ConnectionError(self.reason)
 
     def dispatch_rpa(self, action_type: str, action_data: Dict[str, Any]) -> str:
@@ -119,6 +175,22 @@ class MqttCommandDispatcher:
         if not self.mqtt.client.connected_flag or self.mqtt.client.bad_connection_flag:
             raise ConnectionError("MQTT连接不可用，请检查MQTT服务状态。")
         self.mqtt.publish(topic, payload)
+
+    def dispatch_wait(
+        self,
+        topic: str,
+        payload: Dict[str, Any],
+        timeout: float = 0,
+    ) -> Dict[str, Any]:
+        self.dispatch(topic, payload)
+        return {
+            "status": "queued",
+            "queued": True,
+            "completed": False,
+            "dispatcher": type(self).__name__,
+            "wait_supported": False,
+            "message": "MQTT dispatcher cannot wait for local RPA completion.",
+        }
 
     def dispatch_rpa(self, action_type: str, action_data: Dict[str, Any]) -> str:
         """

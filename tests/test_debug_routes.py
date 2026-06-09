@@ -1,4 +1,5 @@
 import unittest
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -22,10 +23,127 @@ class DummyWindowManager:
     MSG_WIDTH = 326
     MSG_HEIGHT = 280
     ICON_CONFIGS = {"send_button": {"position": [540, 430, 620, 465]}}
+    current_window = {"region": [0, 0, 640, 480]}
+    target_window_size = (640, 480)
+    actual_window_geometry = {"x": 0, "y": 0, "width": 640, "height": 480}
+    window_aligned = True
+    window_id = "123"
+    last_window_state = "ready"
+
+    def refresh_window_geometry(self):
+        return self.actual_window_geometry
+
+    def ensure_action_ready(self):
+        self.last_window_state = "ready"
+        self.window_aligned = True
+        return True
 
 
 class DummyBot:
     window_manager = DummyWindowManager()
+    chat_window_ready = False
+
+
+class DummyContact:
+    id = 1
+    username = "alice"
+    local_type = 0
+    alias = "alice-alias"
+    delete_flag = 0
+    verify_flag = 0
+    chat_room_notify = 0
+    head_img_md5 = "md5"
+    description = ""
+    remark = "Alice"
+    nick_name = "Alice Nick"
+    room_remark = ""
+
+    @property
+    def display_name(self):
+        return self.remark or self.nick_name or self.username
+
+    @property
+    def is_chatroom(self):
+        return self.username.endswith("@chatroom")
+
+
+class DummyDatabaseService:
+    is_available = True
+    last_error = ""
+
+    def __init__(self):
+        self.contact = DummyContact()
+        self._contact_by_username = {self.contact.username: self.contact}
+        self._message_username_map = {self.contact.username: {Path("/tmp/message_0.db")}}
+        self.refreshed = False
+
+    def get_contact_by_username(self, username):
+        return self._contact_by_username.get(username)
+
+    def get_contact_by_display_name(self, name):
+        return [self.contact] if name in {"Alice", "alice"} else []
+
+    def get_contact_by_sender_id(self, sender_id, message_db_path=None):
+        return self.contact
+
+    def get_messages_by_username(self, username, count=10, order="desc"):
+        return [
+            (
+                1,
+                1001,
+                1,
+                10,
+                1,
+                1780998000,
+                0,
+                0,
+                0,
+                0,
+                0,
+                "",
+                "hello",
+                None,
+                None,
+                None,
+                None,
+                "/tmp/message_0.db",
+            )
+        ][:count]
+
+    def query_text_messages(self, username, query=None, start_timestamp=None, end_timestamp=None, limit=10):
+        return [("hello", "alice", "/tmp/message_0.db", 1780998000, 1001)]
+
+    def get_room_member_list(self, username):
+        return []
+
+    def get_status(self):
+        return {"available": self.is_available, "contacts": 1, "message_tables": 1}
+
+    def refresh(self):
+        self.refreshed = True
+        return self.get_status()
+
+
+class DummyMessageService:
+    is_running = True
+    is_paused = False
+    message_queue = None
+
+    def pause(self):
+        self.is_paused = True
+
+    def resume(self):
+        self.is_paused = False
+
+
+class DummyMcpBot(DummyBot):
+    def __init__(self):
+        self.window_manager = DummyWindowManager()
+        self.database_service = DummyDatabaseService()
+        self.message_service = DummyMessageService()
+        self.message_factory_service = None
+        self.rpa_task_queue = None
+        self.chat_window_ready = False
 
 
 class DummyConfig(dict):
@@ -104,6 +222,62 @@ class DebugRoutesTest(unittest.TestCase):
 
         self.assertNotIn("/dashboard", paths)
         self.assertNotIn("/debug", paths)
+
+    def test_create_app_registers_manager_mcp_tools(self):
+        app = create_app(
+            UserInfo(account="me"),
+            DummyConfig({"debug": {"enabled": False}, "mcp": {"port": 8000}}),
+            bot=DummyMcpBot(),
+        )
+        tools = set(app._tool_manager._tools)
+
+        self.assertIn("get_database_status", tools)
+        self.assertIn("refresh_database", tools)
+        self.assertIn("get_contact_detail", tools)
+        self.assertIn("search_text_messages", tools)
+        self.assertIn("get_recent_media_messages", tools)
+        self.assertIn("get_wechat_window_status", tools)
+        self.assertIn("reset_wechat_window", tools)
+        self.assertIn("set_message_polling", tools)
+
+    def test_mcp_database_and_window_tools_return_json_status(self):
+        bot = DummyMcpBot()
+        app = create_app(
+            UserInfo(account="me"),
+            DummyConfig({"debug": {"enabled": False}, "mcp": {"port": 8000}}),
+            bot=bot,
+        )
+
+        database = json.loads(app._tool_manager._tools["get_database_status"].fn(None))
+        window = json.loads(app._tool_manager._tools["get_wechat_window_status"].fn(None))
+        reset = json.loads(app._tool_manager._tools["reset_wechat_window"].fn(None))
+        pause = json.loads(app._tool_manager._tools["set_message_polling"].fn(None, True))
+
+        self.assertEqual(database["status"], "ok")
+        self.assertEqual(window["status"], "ok")
+        self.assertEqual(window["state"], "ready")
+        self.assertEqual(reset["status"], "ok")
+        self.assertTrue(bot.chat_window_ready)
+        self.assertEqual(pause["status"], "ok")
+        self.assertTrue(pause["paused"])
+
+    def test_mcp_contact_and_message_tools_return_structured_payloads(self):
+        app = create_app(
+            UserInfo(account="me"),
+            DummyConfig({"debug": {"enabled": False}, "mcp": {"port": 8000}}),
+            bot=DummyMcpBot(),
+        )
+
+        contact = json.loads(app._tool_manager._tools["get_contact_detail"].fn(None, "Alice"))
+        recent = json.loads(app._tool_manager._tools["get_recent_messages"].fn(None, "Alice", 5))
+        searched = json.loads(app._tool_manager._tools["search_text_messages"].fn(None, "Alice", "hello"))
+
+        self.assertEqual(contact["status"], "ok")
+        self.assertTrue(contact["contact"]["has_message_table"])
+        self.assertEqual(recent["status"], "ok")
+        self.assertEqual(recent["messages"][0]["text"], "hello")
+        self.assertEqual(searched["status"], "ok")
+        self.assertEqual(searched["messages"][0]["text"], "hello")
 
     def test_suggest_size_aligns_configured_window_to_factor(self):
         original_size = size_config.pyautogui.size

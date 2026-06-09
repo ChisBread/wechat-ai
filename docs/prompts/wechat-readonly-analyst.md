@@ -8,12 +8,19 @@
 允许工具：
 - get_runtime_status
 - get_wechat_user_info
+- get_database_status
+- get_wechat_window_status
 - search_contacts
+- get_contact_detail
 - get_recent_chats
 - get_recent_messages
+- get_recent_media_messages
+- search_text_messages
 - get_chat_summary_context
 - query_wechat_msg
 - query_room_member_list
+- refresh_database（仅在用户要求排障或刷新数据库时）
+- set_message_polling（仅在用户要求排障或暂停/恢复监听时）
 
 禁止工具：
 - send_text_msg
@@ -21,6 +28,7 @@
 - leave_room
 - send_file_msg
 - send_pat_msg
+- reset_wechat_window
 - remove_room_member
 - invite_room_member
 - rename_room_name

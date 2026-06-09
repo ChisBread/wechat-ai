@@ -15,6 +15,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -179,6 +180,15 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
     def _database_service() -> Any:
         return getattr(bot, "database_service", None) if bot is not None else None
 
+    def _message_service() -> Any:
+        return getattr(bot, "message_service", None) if bot is not None else None
+
+    def _window_manager() -> Any:
+        return getattr(bot, "window_manager", None) if bot is not None else None
+
+    def _message_factory_service() -> Any:
+        return getattr(bot, "message_factory_service", None) if bot is not None else None
+
     def _json(payload: Any, *, indent: Optional[int] = None) -> str:
         return json.dumps(payload, ensure_ascii=False, indent=indent)
 
@@ -197,6 +207,20 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             "message": "Linux WeChat database service is not available.",
             "detail": getattr(db, "last_error", "") if db else "db service missing",
         }
+
+    def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            number = default
+        return max(minimum, min(number, maximum))
+
+    def _bounded_float(value: Any, default: float, minimum: float, maximum: float) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = default
+        return max(minimum, min(number, maximum))
 
     def _resolve_contact_name(name: str) -> Any:
         db = _database_service()
@@ -222,6 +246,28 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             "is_chatroom": bool(getattr(contact, "is_chatroom", False)),
             "local_type": getattr(contact, "local_type", None),
         }
+
+    def _contact_detail_payload(db: Any, contact: Any) -> dict[str, Any]:
+        payload = _contact_payload(contact)
+        if not contact:
+            return payload
+        username = str(getattr(contact, "username", "") or "")
+        payload.update(
+            {
+                "delete_flag": getattr(contact, "delete_flag", None),
+                "verify_flag": getattr(contact, "verify_flag", None),
+                "chat_room_notify": getattr(contact, "chat_room_notify", None),
+                "head_img_md5": str(getattr(contact, "head_img_md5", "") or ""),
+                "description": str(getattr(contact, "description", "") or ""),
+                "has_message_table": bool(username in (getattr(db, "_message_username_map", {}) or {})),
+            }
+        )
+        if payload.get("is_chatroom"):
+            try:
+                payload["member_count"] = len(db.get_room_member_list(username))
+            except Exception:
+                payload["member_count"] = None
+        return payload
 
     def _search_contacts(db: Any, query: str, limit: int) -> list[Any]:
         if not db or not query:
@@ -308,6 +354,96 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             payload["text"] = _truncate_text(str(row[12] if len(row) > 12 else ""), 4000)
         return payload
 
+    def _rows_for_contact(db: Any, contact: Any, limit: int, order: str = "desc") -> list[tuple]:
+        rows = db.get_messages_by_username(contact.username, count=limit, order=order)
+        if str(order).lower() != "asc":
+            rows.reverse()
+        return rows
+
+    def _table_name_for_contact(contact: Any) -> str:
+        return f"Msg_{hashlib.md5(str(contact.username).encode()).hexdigest()}"
+
+    def _factory_message_payload(db: Any, contact: Any, row: tuple) -> dict[str, Any]:
+        payload = _message_payload(db, row, include_text=True)
+        factory_service = _message_factory_service()
+        if not factory_service:
+            payload["factory_ok"] = False
+            payload["factory_error"] = "message factory service unavailable"
+            return payload
+        try:
+            message = factory_service.create_message((_table_name_for_contact(contact), row))
+        except Exception as exc:
+            payload["factory_ok"] = False
+            payload["factory_error"] = f"{type(exc).__name__}: {exc}"
+            return payload
+        if not message:
+            payload["factory_ok"] = False
+            payload["factory_error"] = "unsupported message type"
+            payload["raw_content"] = _truncate_text(str(row[12] if len(row) > 12 else ""), 1200)
+            return payload
+
+        payload["factory_ok"] = True
+        try:
+            payload["text"] = _truncate_text(str(message.to_text() or ""), 4000)
+        except Exception:
+            pass
+        for key in (
+            "path",
+            "thumb_path",
+            "cover_path",
+            "file_name",
+            "file_size",
+            "file_type",
+            "md5",
+            "raw_md5",
+            "duration",
+            "url",
+            "description",
+        ):
+            if not hasattr(message, key):
+                continue
+            value = getattr(message, key)
+            if isinstance(value, (bytes, bytearray)):
+                continue
+            payload[key] = str(value) if isinstance(value, Path) else value
+        return payload
+
+    def _window_status_payload(window_manager: Any) -> dict[str, Any]:
+        if not window_manager:
+            return {"status": "unavailable", "message": "window manager unavailable"}
+        refresh = getattr(window_manager, "refresh_window_geometry", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:
+                logger.debug("refresh_window_geometry failed", exc_info=True)
+        return {
+            "state": getattr(window_manager, "last_window_state", ""),
+            "current_window": bool(getattr(window_manager, "current_window", None)),
+            "target_size": list(getattr(window_manager, "target_window_size", ()) or ()),
+            "actual_geometry": getattr(window_manager, "actual_window_geometry", {}) or {},
+            "aligned": bool(getattr(window_manager, "window_aligned", False)),
+            "window_id": getattr(window_manager, "window_id", None),
+            "message_region": (
+                [
+                    getattr(window_manager, "MSG_TOP_X", 0),
+                    getattr(window_manager, "MSG_TOP_Y", 0),
+                    getattr(window_manager, "MSG_WIDTH", 0),
+                    getattr(window_manager, "MSG_HEIGHT", 0),
+                ]
+                if getattr(window_manager, "MSG_WIDTH", 0) and getattr(window_manager, "MSG_HEIGHT", 0)
+                else None
+            ),
+            "sidebar_width": getattr(window_manager, "SIDE_BAR_WIDTH", 0),
+            "session_list_width": getattr(window_manager, "SESSION_LIST_WIDTH", 0),
+            "title_bar_height": getattr(window_manager, "TITLE_BAR_HEIGHT", 0),
+            "send_button": (
+                getattr(window_manager, "ICON_CONFIGS", {})
+                .get("send_button", {})
+                .get("position")
+            ),
+        }
+
     def _chat_line(message: dict[str, Any]) -> str:
         sender = message.get("sender_display") or message.get("sender_username") or "unknown"
         when = message.get("time") or str(message.get("create_time") or "")
@@ -369,6 +505,39 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
 
     @mcp.tool()
     @handle_tool_exceptions
+    def get_wechat_window_status(ctx: Context) -> str:
+        """
+        Get current WeChat X11 window geometry, alignment, layout, and send button state.
+        """
+        window_manager = _window_manager()
+        payload = _window_status_payload(window_manager)
+        payload["status"] = "ok" if window_manager else "unavailable"
+        return _json(payload)
+
+    @mcp.tool()
+    @handle_tool_exceptions
+    def reset_wechat_window(ctx: Context) -> str:
+        """
+        Normalize WeChat window state for visual RPA and YOLO: enter main window, resize, and rebuild layout.
+        """
+        window_manager = _window_manager()
+        if not window_manager:
+            return _json({"status": "unavailable", "message": "window manager unavailable"})
+        ensure_ready = getattr(window_manager, "ensure_action_ready", None)
+        if not callable(ensure_ready):
+            return _json({"status": "unavailable", "message": "window reset is unavailable"})
+        ok = bool(ensure_ready())
+        if ok and bot is not None and hasattr(bot, "chat_window_ready"):
+            bot.chat_window_ready = True
+        return _json(
+            {
+                "status": "ok" if ok else "failed",
+                "window": _window_status_payload(window_manager),
+            }
+        )
+
+    @mcp.tool()
+    @handle_tool_exceptions
     def search_contacts(
         ctx: Context,
         query: str,
@@ -402,6 +571,74 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 "query": query,
                 "count": len(contacts),
                 "contacts": [_contact_payload(contact) for contact in contacts],
+            }
+        )
+
+    @mcp.tool()
+    @handle_tool_exceptions
+    def get_contact_detail(ctx: Context, contact_name: str) -> str:
+        """
+        Resolve one contact/chatroom and return detail useful for deciding follow-up tools.
+        """
+        db = _database_service()
+        if not db or not getattr(db, "is_available", False):
+            return _json(_database_unavailable_payload(db))
+        contact = _resolve_contact_name(contact_name)
+        if not contact:
+            return _json(
+                {
+                    "status": "not_found",
+                    "message": f"未找到联系人或群聊: {contact_name}",
+                }
+            )
+        return _json({"status": "ok", "contact": _contact_detail_payload(db, contact)})
+
+    @mcp.tool()
+    @handle_tool_exceptions
+    def get_database_status(ctx: Context) -> str:
+        """Get Linux WeChat database discovery, key, contact, and message-table status."""
+        db = _database_service()
+        if not db:
+            return _json(_database_unavailable_payload(db))
+        status = db.get_status() if hasattr(db, "get_status") else {}
+        return _json({"status": "ok" if getattr(db, "is_available", False) else "unavailable", "database": status})
+
+    @mcp.tool()
+    @handle_tool_exceptions
+    def refresh_database(ctx: Context) -> str:
+        """Rescan Linux WeChat databases and SQLCipher keys, then reload contact/message maps."""
+        db = _database_service()
+        if not db or not hasattr(db, "refresh"):
+            return _json(_database_unavailable_payload(db))
+        status = db.refresh()
+        return _json(
+            {
+                "status": "ok" if getattr(db, "is_available", False) else "unavailable",
+                "database": status,
+            }
+        )
+
+    @mcp.tool()
+    @handle_tool_exceptions
+    def set_message_polling(ctx: Context, paused: bool) -> str:
+        """Pause or resume database message polling."""
+        message_service = _message_service()
+        if not message_service:
+            return _json({"status": "unavailable", "message": "message service unavailable"})
+        if paused:
+            if not hasattr(message_service, "pause"):
+                return _json({"status": "unavailable", "message": "message pause is unavailable"})
+            message_service.pause()
+        else:
+            if not hasattr(message_service, "resume"):
+                return _json({"status": "unavailable", "message": "message resume is unavailable"})
+            message_service.resume()
+        return _json(
+            {
+                "status": "ok",
+                "paused": bool(getattr(message_service, "is_paused", False)),
+                "running": bool(getattr(message_service, "is_running", False)),
+                "queue_size": getattr(getattr(message_service, "message_queue", None), "qsize", lambda: None)(),
             }
         )
 
@@ -445,9 +682,10 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         contact_name: str,
         limit: Optional[int] = 30,
         include_non_text: bool = True,
+        parse_media: bool = False,
     ) -> str:
         """
-        Get recent messages for a contact/chatroom. Text is included; media is summarized by type.
+        Get recent messages for a contact/chatroom. Set parse_media=true to resolve media/file paths.
         """
         db = _database_service()
         if not db or not getattr(db, "is_available", False):
@@ -460,16 +698,115 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                     "message": f"未找到联系人或群聊: {contact_name}",
                 }
             )
-        bounded_limit = max(1, min(int(limit or 30), 200))
-        rows = db.get_messages_by_username(contact.username, count=bounded_limit)
-        rows.reverse()
-        messages = [_message_payload(db, row, include_text=True) for row in rows]
+        bounded_limit = _bounded_int(limit, 30, 1, 200)
+        rows = _rows_for_contact(db, contact, bounded_limit)
+        messages = [
+            _factory_message_payload(db, contact, row) if parse_media else _message_payload(db, row, include_text=True)
+            for row in rows
+        ]
         if not include_non_text:
             messages = [
                 message
                 for message in messages
                 if message.get("type") in (MessageType.Text, MessageType.Text2)
             ]
+        return _json(
+            {
+                "status": "ok",
+                "contact": _contact_payload(contact),
+                "count": len(messages),
+                "messages": messages,
+            }
+        )
+
+    @mcp.tool()
+    @handle_tool_exceptions
+    def search_text_messages(
+        ctx: Context,
+        contact_name: str,
+        query: Optional[str] = None,
+        start_timestamp: Optional[int] = None,
+        end_timestamp: Optional[int] = None,
+        limit: Optional[int] = 100,
+    ) -> str:
+        """
+        Search text messages in one contact/chatroom with optional keyword and timestamp range.
+        """
+        db = _database_service()
+        if not db or not getattr(db, "is_available", False):
+            return _json(_database_unavailable_payload(db))
+        contact = _resolve_contact_name(contact_name)
+        if not contact:
+            return _json(
+                {
+                    "status": "not_found",
+                    "message": f"未找到联系人或群聊: {contact_name}",
+                }
+            )
+        bounded_limit = _bounded_int(limit, 100, 1, 500)
+        rows = db.query_text_messages(
+            username=contact.username,
+            query=query,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            limit=bounded_limit,
+        )
+        rows.reverse()
+        messages = []
+        for content, sender_username, db_path, create_time, server_id in rows:
+            sender = db.get_contact_by_username(sender_username)
+            messages.append(
+                {
+                    "text": _truncate_text(str(content or ""), 4000),
+                    "sender_username": sender_username or "",
+                    "sender_display": getattr(sender, "display_name", "") if sender else sender_username or "",
+                    "create_time": create_time,
+                    "time": _format_timestamp(create_time),
+                    "server_id": str(server_id or ""),
+                    "db_path": str(db_path or ""),
+                }
+            )
+        return _json(
+            {
+                "status": "ok",
+                "contact": _contact_payload(contact),
+                "query": query or "",
+                "count": len(messages),
+                "messages": messages,
+            }
+        )
+
+    @mcp.tool()
+    @handle_tool_exceptions
+    def get_recent_media_messages(
+        ctx: Context,
+        contact_name: str,
+        limit: Optional[int] = 20,
+    ) -> str:
+        """
+        Get recent non-text messages with best-effort parsed local media/file paths.
+        """
+        db = _database_service()
+        if not db or not getattr(db, "is_available", False):
+            return _json(_database_unavailable_payload(db))
+        contact = _resolve_contact_name(contact_name)
+        if not contact:
+            return _json(
+                {
+                    "status": "not_found",
+                    "message": f"未找到联系人或群聊: {contact_name}",
+                }
+            )
+        bounded_limit = _bounded_int(limit, 20, 1, 100)
+        rows = _rows_for_contact(db, contact, max(bounded_limit * 3, bounded_limit))
+        messages = []
+        for row in rows:
+            local_type = row[2] if len(row) > 2 else None
+            if local_type in (MessageType.Text, MessageType.Text2):
+                continue
+            messages.append(_factory_message_payload(db, contact, row))
+            if len(messages) >= bounded_limit:
+                break
         return _json(
             {
                 "status": "ok",
@@ -581,12 +918,17 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         message: str,
         at_user_name: Optional[str] = None,
         dry_run: bool = False,
+        wait_seconds: Optional[float] = 12,
     ) -> str:
         """
         Send a text message to a user or group via RPA.
         Supports @mention in groups. Set dry_run=true to resolve the target without sending.
+        wait_seconds controls whether the local RPA execution result is awaited.
         """
         app_context = _get_app_context_from_request(ctx)
+        message = str(message or "")
+        if not message:
+            return _json({"status": "invalid_request", "message": "message is required"})
 
         recipient = _resolve_contact_name(recipient_name)
         if recipient:
@@ -624,8 +966,21 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         }
         if dry_run:
             return _json(response)
-        app_context.command_dispatcher.dispatch(topic, payload)
+        wait_timeout = _bounded_float(wait_seconds, 12, 0, 30)
+        dispatch_wait = getattr(app_context.command_dispatcher, "dispatch_wait", None)
+        if callable(dispatch_wait):
+            dispatch_result = dispatch_wait(topic, payload, timeout=wait_timeout)
+        else:
+            app_context.command_dispatcher.dispatch(topic, payload)
+            dispatch_result = {
+                "status": "queued",
+                "queued": True,
+                "completed": False,
+                "dispatcher": type(app_context.command_dispatcher).__name__,
+            }
+        response.update(dispatch_result)
         response["dispatcher"] = type(app_context.command_dispatcher).__name__
+        response["wait_seconds"] = wait_timeout
         return _json(response)
 
     @mcp.tool()
@@ -675,27 +1030,18 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         """Query group member list from the Linux WeChat contact DB."""
         db = _database_service()
         if not db or not getattr(db, "is_available", False):
-            return json.dumps(
-                {"status": "unavailable", "message": "database service unavailable"},
-                ensure_ascii=False,
-            )
+            return _json(_database_unavailable_payload(db))
         room = _resolve_contact_name(room_name)
         if not room or not room.username.endswith("@chatroom"):
-            return json.dumps(
-                {"status": "not_found", "message": f"未找到群聊: {room_name}"},
-                ensure_ascii=False,
-            )
+            return _json({"status": "not_found", "message": f"未找到群聊: {room_name}"})
         members = db.get_room_member_list(room.username)
-        return json.dumps(
-            [
-                {
-                    "username": member.username,
-                    "display_name": member.display_name,
-                    "remark": member.remark,
-                }
-                for member in members
-            ],
-            ensure_ascii=False,
+        return _json(
+            {
+                "status": "ok",
+                "room": _contact_payload(room),
+                "count": len(members),
+                "members": [_contact_payload(member) for member in members],
+            }
         )
 
     @mcp.tool()
