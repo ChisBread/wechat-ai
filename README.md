@@ -102,8 +102,9 @@ Container: wechat-ai
 
 `/config/xwechat_files/all_users/login/<account>/key_info.db` 是明文 SQLite，
 包含 `LoginKeyInfoTable(user_name_md5, key_md5, key_info_md5, key_info_data)`。
-项目已加入 `LinuxDatabaseDiscovery` 用于只读发现账号目录、业务库路径和 key
-元数据形态。后续接入 SQLCipher/WCDB 打开业务库后，再替换或补充视觉读取。
+项目已加入 `LinuxDatabaseDiscovery` 用于只读发现账号目录、业务库路径、key
+元数据形态和本地 SQLCipher 能力。镜像内包含系统 `sqlcipher` CLI；后续拿到
+正确 key/PRAGMA 后，可先用 CLI fallback 验证打开业务库，再替换或补充视觉读取。
 
 ## 技术栈
 

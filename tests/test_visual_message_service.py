@@ -111,6 +111,8 @@ class LinuxDatabaseDiscoveryTest(unittest.TestCase):
             report = discovery.scan()
 
             self.assertEqual(len(report.accounts), 1)
+            self.assertIsInstance(report.sqlcipher_available, bool)
+            self.assertIsInstance(report.sqlcipher_driver, str)
             account = report.accounts[0]
             self.assertEqual(account.account_id, "wxid_test")
             self.assertEqual(account.storage_suffix, "abcd")

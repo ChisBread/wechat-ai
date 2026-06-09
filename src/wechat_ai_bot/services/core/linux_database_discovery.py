@@ -7,6 +7,7 @@ opened with the current Python environment.
 """
 
 import importlib.util
+import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,9 +34,10 @@ class LinuxDatabaseDiscoveryReport:
     root: Path
     accounts: list[LinuxWeChatAccountStorage]
     sqlcipher_available: bool
+    sqlcipher_driver: str = ""
 
     @property
-    def can_read_business_databases(self) -> bool:
+    def can_attempt_business_database_open(self) -> bool:
         return self.sqlcipher_available
 
 
@@ -77,7 +79,8 @@ class LinuxDatabaseDiscovery:
         return LinuxDatabaseDiscoveryReport(
             root=self.root,
             accounts=accounts,
-            sqlcipher_available=self._sqlcipher_available(),
+            sqlcipher_available=bool(self._sqlcipher_driver()),
+            sqlcipher_driver=self._sqlcipher_driver(),
         )
 
     def read_login_key_schema(self, login_key_db: Path) -> dict[str, list[str]]:
@@ -110,11 +113,13 @@ class LinuxDatabaseDiscovery:
         account_id, _, suffix = dirname.rpartition("_")
         return account_id or dirname, suffix
 
-    def _sqlcipher_available(self) -> bool:
+    def _sqlcipher_driver(self) -> str:
         if importlib.util.find_spec("pysqlcipher3") is not None:
-            return True
+            return "pysqlcipher3"
         if importlib.util.find_spec("sqlcipher3") is not None:
-            return True
+            return "sqlcipher3"
         if importlib.util.find_spec("apsw") is not None:
-            return True
-        return False
+            return "apsw"
+        if shutil.which("sqlcipher"):
+            return "sqlcipher-cli"
+        return ""
