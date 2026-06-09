@@ -33,6 +33,9 @@ RUN apt-get update && \
         curl wget xclip xdotool x11-utils x11-xserver-utils gnome-screenshot libgl1 \
         python3.12 python3.12-venv python3.12-dev python3-tk
 
+RUN sed -i 's/^# *zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen && \
+    locale-gen zh_CN.UTF-8
+
 RUN python3.12 -m venv /opt/venv-bot && \
     /opt/venv-bot/bin/pip config set global.index-url "${PIP_INDEX_URL}" && \
     /opt/venv-bot/bin/pip install --upgrade pip setuptools wheel
@@ -73,6 +76,8 @@ RUN sed -i '/<dock>/,/<\/dock>/s/<noStrut>no<\/noStrut>/<noStrut>yes<\/noStrut>/
 
 ENV TITLE="WeChat-AI"
 ENV TZ="Asia/Shanghai"
+ENV LANG="zh_CN.UTF-8"
+ENV LANGUAGE="zh_CN:zh"
 ENV LC_ALL="zh_CN.UTF-8"
 ENV AUTO_START_WECHAT="true"
 ENV BOT_ENABLED="true"

@@ -12,6 +12,8 @@ services:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-100}
       - TZ=${TZ:-Asia/Shanghai}
+      - LANG=zh_CN.UTF-8
+      - LANGUAGE=zh_CN:zh
       - LC_ALL=zh_CN.UTF-8
       - TITLE=WeChat-AI
       - CUSTOM_USER=${CUSTOM_USER:-}

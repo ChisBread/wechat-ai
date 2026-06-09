@@ -73,6 +73,7 @@ class XFCEWindowManager:
         for query in (
             ("search", "--class", "wechat"),
             ("search", "--name", "WeChat"),
+            ("search", "--name", "Weixin"),
             ("search", "--name", "微信"),
         ):
             r = _run("xdotool", *query)
@@ -89,7 +90,7 @@ class XFCEWindowManager:
 
         visible = [
             item for item in candidates
-            if item[3] in {"WeChat", "微信"}
+            if item[3] in {"WeChat", "Weixin", "微信"}
             and item[2]["width"] >= 250
             and item[2]["height"] >= 300
         ]
@@ -381,6 +382,7 @@ class XFCEWindowManager:
         self.logger.info("Initializing chat window (Openbox/X11)...")
         try:
             if not subprocess.run(["pgrep", "-x", "wechat"], capture_output=True).stdout.strip():
+                self.last_window_state = "wechat_not_running"
                 self.logger.error("WeChat not running"); return False
 
             wid = self._find_wechat_window()
