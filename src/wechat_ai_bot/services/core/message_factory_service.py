@@ -68,6 +68,11 @@ class MessageFactoryService:
             create_time=int(message.get("timestamp") or 0),
             target_name=str(message.get("target") or ""),
             session_id=str(message.get("session_id") or ""),
+            sender_name=str(message.get("sender") or ""),
             region=message.get("region"),
             source=str(message.get("source") or "visual"),
+            visual_type=str(message.get("visual_type") or "text"),
+            confidence=float(message.get("confidence") or 0),
+            self_message=bool(message.get("is_self")),
+            chatroom=bool(message.get("is_chatroom")),
         )

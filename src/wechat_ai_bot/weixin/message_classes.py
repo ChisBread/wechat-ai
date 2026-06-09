@@ -339,8 +339,13 @@ class VisualTextMessage:
     create_time: int
     target_name: str = ""
     session_id: str = ""
+    sender_name: str = ""
     region: Optional[list] = None
     source: str = "visual"
+    visual_type: str = "text"
+    confidence: float = 0
+    self_message: bool = False
+    chatroom: bool = False
     local_id: Optional[int] = None
     server_id: Optional[int] = None
     local_type: int = MessageType.Text
@@ -369,11 +374,11 @@ class VisualTextMessage:
 
     @property
     def real_sender_name(self) -> str:
-        return self.target_name
+        return self.sender_name or self.target_name
 
     @property
     def is_self(self) -> bool:
-        return False
+        return self.self_message
 
     @property
     def is_at(self) -> bool:
@@ -381,7 +386,7 @@ class VisualTextMessage:
 
     @property
     def is_chatroom(self) -> bool:
-        return False
+        return self.chatroom and self.room is not None
 
     @property
     def type_name(self) -> str:
@@ -411,6 +416,8 @@ class VisualTextMessage:
             "source": self.source,
             "target": self.target_name,
             "session_id": self.session_id,
+            "visual_type": self.visual_type,
+            "confidence": self.confidence,
             "region": self.region,
         }
 

@@ -275,6 +275,50 @@ class XFCEWindowManager:
                 best_y = y
         return best_y
 
+    def _find_full_width_horizontal_boundary(
+        self,
+        screenshot,
+        y_min: int,
+        y_max: int,
+        x_min: int,
+        x_max: int,
+        diff_threshold: int = 18,
+        min_strong_ratio: float = 0.55,
+        min_avg_diff: float = 20,
+    ) -> Optional[int]:
+        pixels = screenshot.load()
+        width, height = screenshot.size
+        x_min = max(1, min(x_min, width - 2))
+        x_max = max(x_min + 1, min(x_max, width - 1))
+        y_min = max(1, min(y_min, height - 2))
+        y_max = max(y_min + 1, min(y_max, height - 1))
+
+        best_y = None
+        best_score = -1
+        for y in range(y_min, y_max):
+            total = 0
+            strong = 0
+            samples = 0
+            for x in range(x_min, x_max, 4):
+                top = pixels[x, y - 1]
+                bottom = pixels[x, y]
+                diff = sum(abs(int(bottom[i]) - int(top[i])) for i in range(3))
+                total += diff
+                samples += 1
+                if diff > diff_threshold:
+                    strong += 1
+            if not samples:
+                continue
+            strong_ratio = strong / samples
+            avg_diff = total / samples
+            if strong_ratio < min_strong_ratio or avg_diff < min_avg_diff:
+                continue
+            score = strong_ratio * 1000 + avg_diff
+            if score > best_score:
+                best_score = score
+                best_y = y
+        return best_y
+
     def init_chat_window(self) -> bool:
         self.logger.info("Initializing chat window (Openbox/X11)...")
         try:
@@ -339,25 +383,44 @@ class XFCEWindowManager:
         self.SESSION_LIST_WIDTH = session_right - sidebar
         self.MSG_TOP_X = session_right
 
-        title_bottom = self._find_horizontal_boundary(
+        title_bottom = self._find_full_width_horizontal_boundary(
             screenshot,
-            50,
-            95,
+            52,
+            82,
             self.MSG_TOP_X + 10,
             w - 10,
+            diff_threshold=8,
+            min_strong_ratio=0.45,
+            min_avg_diff=6,
         )
-        if not 50 <= title_bottom <= 95:
+        if title_bottom is None:
+            title_bottom = self._find_horizontal_boundary(
+                screenshot,
+                52,
+                82,
+                self.MSG_TOP_X + 10,
+                w - 10,
+            )
+        if not 52 <= title_bottom <= 82:
             title_bottom = 70
         self.TITLE_BAR_HEIGHT = title_bottom
         self.MSG_TOP_Y = title_bottom
 
-        input_top = self._find_horizontal_boundary(
+        input_top = self._find_full_width_horizontal_boundary(
             screenshot,
             max(self.MSG_TOP_Y + 200, h - 360),
             h - 80,
             self.MSG_TOP_X + 10,
             w - 10,
         )
+        if input_top is None:
+            input_top = self._find_horizontal_boundary(
+                screenshot,
+                max(self.MSG_TOP_Y + 200, h - 360),
+                h - 80,
+                self.MSG_TOP_X + 10,
+                w - 10,
+            )
         if input_top <= self.MSG_TOP_Y + 200:
             input_top = h - 150
 

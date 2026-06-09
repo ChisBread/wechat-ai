@@ -88,10 +88,22 @@ Container: wechat-ai
 |  | Layer     |              | Reader (OCR)   |     |
 |  | (X11/pyau-|              | - Screenshot   |     |
 |  | togui/mss)|              |   chat area    |     |
-|  +-----------+              | - OCR text     |     |
+|  +-----------+              | - YOLO + OCR   |     |
 |                              +----------------+     |
 +----------------------------------------------------+
 ```
+
+## Linux 微信数据库状态
+
+当前实时消息读取走视觉通道。Linux 微信 4.x 的数据位于
+`/config/xwechat_files/<account>_<suffix>/db_storage/`，按
+`message/contact/session/...` 分库；这些业务 `.db` 文件不是普通
+`SQLite format 3` 文件头，标准库 `sqlite3` 不能直接打开。
+
+`/config/xwechat_files/all_users/login/<account>/key_info.db` 是明文 SQLite，
+包含 `LoginKeyInfoTable(user_name_md5, key_md5, key_info_md5, key_info_data)`。
+项目已加入 `LinuxDatabaseDiscovery` 用于只读发现账号目录、业务库路径和 key
+元数据形态。后续接入 SQLCipher/WCDB 打开业务库后，再替换或补充视觉读取。
 
 ## 技术栈
 

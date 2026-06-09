@@ -66,7 +66,7 @@ class OCRProcessor:
             result = [r for r in result if r["confidence"] >= self.min_confidence]
             elapsed = time.time() - start_time
             if result:
-                self.logger.info(
+                self.logger.debug(
                     "OCR 识别到 %s 个文本块，耗时: %.3f秒", len(result), elapsed
                 )
                 self.logger.debug(result)

@@ -90,7 +90,7 @@ class ImageProcessor:
             return []
         try:
             self.logger.debug("YOLO input image size: %sx%s, imgsz=%s", image.width, image.height, imgsz)
-            results = self.yolo(image, imgsz=imgsz)
+            results = self.yolo(image, imgsz=imgsz, verbose=False)
             detections = []
             for result in results:
                 boxes = result.boxes
