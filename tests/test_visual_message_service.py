@@ -64,6 +64,19 @@ class VisualMessageServiceTest(unittest.TestCase):
         self.assertEqual(svc._hash_detection_image(image, [10, 10, 5, 12]), "")
         self.assertNotEqual(svc._hash_detection_image(image, [1, 1, 10, 10]), "")
 
+    def test_auto_yolo_imgsz_uses_image_shape_aligned_to_stride(self):
+        svc = self.make_service()
+        image = Image.new("RGB", (682, 1616), "white")
+
+        self.assertEqual(svc._resolve_yolo_imgsz(image), [1632, 704])
+        self.assertEqual(svc._last_yolo_imgsz, [1632, 704])
+
+    def test_numeric_yolo_imgsz_is_aligned_to_stride(self):
+        svc = self.make_service()
+        svc.yolo_imgsz = 961
+
+        self.assertEqual(svc._resolve_yolo_imgsz(Image.new("RGB", (20, 20))), 992)
+
     def test_visual_message_factory_maps_metadata(self):
         factory = MessageFactoryService(DummyUserInfo())
 

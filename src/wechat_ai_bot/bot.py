@@ -109,6 +109,8 @@ class Bot:
             poll_interval=visual_config.get("poll_interval", 2.0),
             max_message_age=visual_config.get("max_message_age", 300),
             dedup_cache_size=visual_config.get("dedup_cache_size", 100),
+            yolo_imgsz=visual_config.get("yolo_imgsz", "auto"),
+            yolo_stride=visual_config.get("yolo_stride", 32),
         )
 
         # WeChat status monitor

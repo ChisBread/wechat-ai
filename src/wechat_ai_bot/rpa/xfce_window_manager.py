@@ -37,11 +37,14 @@ class XFCEWindowManager:
 
     def __init__(self, image_processor: ImageProcessor, ocr_processor: OCRProcessor, rpa_config: dict = None):
         self.logger = logging.getLogger(__name__)
-        self.size_config = suggest_size()
+        self.rpa_config = rpa_config or {}
+        self.size_config = suggest_size(self.rpa_config)
         self.weixin_windows = {}
         self.current_window = None
         self.MSG_TOP_X = self.MSG_TOP_Y = self.MSG_WIDTH = self.MSG_HEIGHT = 0
         self.SIDE_BAR_WIDTH = self.SESSION_LIST_WIDTH = self.TITLE_BAR_HEIGHT = 0
+        self.target_window_size = (self.size_config.width, self.size_config.height)
+        self.actual_window_geometry = {}
 
         self.ICON_CONFIGS = {
             "send_button": {"name": "send", "color": "red", "position": None},
@@ -52,7 +55,6 @@ class XFCEWindowManager:
         self.ocr_processor = ocr_processor
         self.last_switch_session = None
         self.current_session_name = ""
-        self.rpa_config = rpa_config or {}
         self.action_delay = self.rpa_config.get("action_delay", 0.3)
         self.scroll_delay = self.rpa_config.get("scroll_delay", 1)
         self.switch_contact_delay = self.rpa_config.get("switch_contact_delay", 0.3)
@@ -213,6 +215,7 @@ class XFCEWindowManager:
             )
             self.size_config.width = target_w
             self.size_config.height = target_h
+        self.target_window_size = (target_w, target_h)
         return target_w, target_h
 
     def _find_vertical_boundary(
@@ -345,6 +348,7 @@ class XFCEWindowManager:
             time.sleep(self.window_show_delay)
             geom = self._window_geometry(wid)
             if geom:
+                self.actual_window_geometry = geom
                 self.size_config.width = geom["width"]
                 self.size_config.height = geom["height"]
                 w, h = geom["width"], geom["height"]

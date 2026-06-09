@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from wechat_ai_bot.mcp.debug import build_layout_png, mask_value, redact_text, tail_file
 from wechat_ai_bot.mcp.app import create_app
 from wechat_ai_bot.models import UserInfo
+from wechat_ai_bot.utils import size_config
 
 
 class DummySize:
@@ -86,6 +87,27 @@ class DebugRoutesTest(unittest.TestCase):
         paths = {route.path for route in app.streamable_http_app().routes}
 
         self.assertNotIn("/debug", paths)
+
+    def test_suggest_size_aligns_configured_window_to_factor(self):
+        original_size = size_config.pyautogui.size
+        size_config.pyautogui.size = lambda: type("Screen", (), {"width": 3840, "height": 1916})()
+        try:
+            suggested = size_config.suggest_size(
+                {
+                    "window": {
+                        "width": 1008,
+                        "height": 0,
+                        "min_height": 812,
+                        "max_height": 2000,
+                        "align_factor": 28,
+                    }
+                }
+            )
+        finally:
+            size_config.pyautogui.size = original_size
+
+        self.assertEqual(suggested.width, 1008)
+        self.assertEqual(suggested.height, 1820)
 
 
 if __name__ == "__main__":

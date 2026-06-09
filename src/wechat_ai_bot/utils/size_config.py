@@ -137,7 +137,7 @@ def convert_qwen_size(
 
 
 # TODO 历史残留，暂时不改了，后续统一处理，核心是基于QwenVL系列模型的图片需要进行resize之后才能提高detect精度
-def suggest_size() -> SizeConfig:
+def suggest_size(config: dict | None = None) -> SizeConfig:
     """
     根据当前屏幕大小，给出建议的窗口大小
     VL模型有最适合的尺寸，不能设置太大或者太小建议是28的倍数
@@ -146,14 +146,20 @@ def suggest_size() -> SizeConfig:
     高度设置为屏幕高度减去任务栏的高度，任务栏就认为是100吧
     宽高都需要是28的倍数
     """
+    config = config or {}
     screen_size = pyautogui.size()
-    width = screen_size.width // 2
-    height = screen_size.height - 80
-    width = 1008
-    if height < 812:
-        height = 812
-    if height > 2000:
-        height = 2000
+    window_config = config.get("window", {}) if isinstance(config, dict) else {}
+    width = int(window_config.get("width") or min(screen_size.width // 2, 1008))
+    height = int(window_config.get("height") or screen_size.height - 80)
+    min_height = int(window_config.get("min_height") or 812)
+    max_height = int(window_config.get("max_height") or 2000)
+    align_factor = int(window_config.get("align_factor") or IMAGE_FACTOR)
+
+    width = max(align_factor, min(width, screen_size.width))
+    height = max(min_height, min(height, max_height, screen_size.height))
+    if align_factor > 1:
+        width = max(align_factor, floor_by_factor(width, align_factor))
+        height = max(min_height, floor_by_factor(height, align_factor))
     # input_height, input_width = smart_resize(height, width)
     return SizeConfig(width, height, 0, 0, 0, 0, 130, 450)
 

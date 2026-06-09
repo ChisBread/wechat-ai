@@ -113,7 +113,9 @@ def build_debug_status(
         "yolo": {
             "model_loaded": bool(getattr(image_processor, "yolo", None)),
             "model_path": str(getattr(image_processor, "model_path", "")),
-            "imgsz": getattr(visual_service, "yolo_imgsz", None),
+            "imgsz_config": getattr(visual_service, "yolo_imgsz", None),
+            "imgsz_actual": getattr(visual_service, "_last_yolo_imgsz", None),
+            "stride": getattr(visual_service, "yolo_stride", None),
         },
         "database": db_report,
         "plugins": _plugin_status(plugin_manager),
@@ -273,6 +275,8 @@ def _window_status(window_manager: Any) -> dict[str, Any]:
     return {
         "current_window": bool(getattr(window_manager, "current_window", None)),
         "message_region": _safe_call(window_manager, "get_message_region"),
+        "target_size": getattr(window_manager, "target_window_size", None),
+        "actual_geometry": getattr(window_manager, "actual_window_geometry", {}),
         "current_session": mask_value(
             str(_safe_call(window_manager, "get_current_session_name") or "")
         ),
@@ -602,7 +606,9 @@ DEBUG_HTML = """<!doctype html>
       ]);
       $('vision').innerHTML = table([
         ['yolo', bool(data.yolo.model_loaded)],
-        ['imgsz', esc(data.yolo.imgsz || '')],
+        ['imgsz config', esc(data.yolo.imgsz_config || '')],
+        ['imgsz actual', esc(JSON.stringify(data.yolo.imgsz_actual || ''))],
+        ['stride', esc(data.yolo.stride || '')],
         ['visual running', bool(data.services.visual.running)],
         ['primed', bool(data.services.visual.primed)],
         ['session', esc(data.services.visual.current_session || '')],

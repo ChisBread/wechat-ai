@@ -10,6 +10,7 @@ Architecture:
 
 import hashlib
 import logging
+import math
 import re
 import threading
 import time
@@ -42,6 +43,8 @@ class VisualMessageService:
         poll_interval: float = 2.0,
         max_message_age: int = 300,
         dedup_cache_size: int = 100,
+        yolo_imgsz: int | str | list[int] | tuple[int, int] = "auto",
+        yolo_stride: int = 32,
     ):
         self.logger = logging.getLogger(__name__)
         self.window_manager = window_manager
@@ -51,7 +54,9 @@ class VisualMessageService:
         self.poll_interval = poll_interval
         self.max_message_age = max_message_age
         self.dedup_cache_size = dedup_cache_size
-        self.yolo_imgsz = 960
+        self.yolo_imgsz = yolo_imgsz
+        self.yolo_stride = max(1, int(yolo_stride or 32))
+        self._last_yolo_imgsz = None
         self.yolo_message_labels = {"text"}
         self.yolo_context_labels = {"avatar", "name", "quote", "time"}
         self.dedup_region_bucket = 48
@@ -154,7 +159,7 @@ class VisualMessageService:
                 return []
 
             detections = self.image_processor.detect_objects(
-                screenshot, imgsz=self.yolo_imgsz
+                screenshot, imgsz=self._resolve_yolo_imgsz(screenshot)
             )
             visual_items, yolo_attempted = self._build_visual_items(
                 detections=detections,
@@ -596,6 +601,43 @@ class VisualMessageService:
         # Normalize: strip extra whitespace, lowercase
         normalized = " ".join(text.lower().split())
         return hashlib.md5(normalized.encode("utf-8")).hexdigest()
+
+    def _resolve_yolo_imgsz(self, image: Image.Image) -> int | list[int]:
+        config = self.yolo_imgsz
+        if isinstance(config, str):
+            value = config.strip().lower()
+            if value == "auto":
+                resolved = [
+                    self._ceil_to_stride(image.height, self.yolo_stride),
+                    self._ceil_to_stride(image.width, self.yolo_stride),
+                ]
+                self._last_yolo_imgsz = resolved
+                return resolved
+            if "," in value:
+                parts = [int(part.strip()) for part in value.split(",") if part.strip()]
+                if len(parts) == 2:
+                    resolved = [
+                        self._ceil_to_stride(parts[0], self.yolo_stride),
+                        self._ceil_to_stride(parts[1], self.yolo_stride),
+                    ]
+                    self._last_yolo_imgsz = resolved
+                    return resolved
+            resolved = self._ceil_to_stride(int(value), self.yolo_stride)
+            self._last_yolo_imgsz = resolved
+            return resolved
+        if isinstance(config, (list, tuple)) and len(config) == 2:
+            resolved = [
+                self._ceil_to_stride(int(config[0]), self.yolo_stride),
+                self._ceil_to_stride(int(config[1]), self.yolo_stride),
+            ]
+            self._last_yolo_imgsz = resolved
+            return resolved
+        resolved = self._ceil_to_stride(int(config or 960), self.yolo_stride)
+        self._last_yolo_imgsz = resolved
+        return resolved
+
+    def _ceil_to_stride(self, value: int, stride: int) -> int:
+        return max(stride, int(math.ceil(value / stride) * stride))
 
     def clear_dedup_cache(self):
         """Clear the deduplication cache (e.g., after switching chats)."""
