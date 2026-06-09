@@ -1,0 +1,746 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WeChat-AI Manager</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --band: #eef3f7;
+      --line: #d6dee7;
+      --text: #17212b;
+      --muted: #65758b;
+      --ok: #0f7b5f;
+      --warn: #9a6700;
+      --bad: #b42318;
+      --blue: #1d4ed8;
+      --cyan: #036672;
+      --shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+    button, input, textarea, select {
+      font: inherit;
+      letter-spacing: 0;
+    }
+    button {
+      border: 1px solid #9aa8b7;
+      background: #fff;
+      color: var(--text);
+      border-radius: 6px;
+      min-height: 34px;
+      padding: 0 12px;
+      cursor: pointer;
+    }
+    button:hover { border-color: var(--blue); color: var(--blue); }
+    button.primary {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #fff;
+    }
+    button.danger {
+      border-color: #e6a19b;
+      color: var(--bad);
+      background: #fff6f5;
+    }
+    input, textarea, select {
+      width: 100%;
+      min-height: 34px;
+      border: 1px solid #bac6d3;
+      border-radius: 6px;
+      padding: 7px 9px;
+      background: #fff;
+      color: var(--text);
+    }
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+      line-height: 1.45;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 12px 18px;
+      background: #17212b;
+      color: #fff;
+      border-bottom: 1px solid #0f1720;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .header-sub {
+      margin-top: 2px;
+      color: #b9c4cf;
+      font-size: 12px;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .shell {
+      display: grid;
+      grid-template-columns: 184px minmax(0, 1fr);
+      min-height: calc(100vh - 59px);
+    }
+    nav {
+      background: #e8edf2;
+      border-right: 1px solid var(--line);
+      padding: 12px 10px;
+    }
+    .nav-btn {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 8px;
+      margin-bottom: 6px;
+      border-color: transparent;
+      background: transparent;
+      color: #344255;
+      text-align: left;
+    }
+    .nav-btn.active {
+      background: #fff;
+      color: var(--blue);
+      border-color: var(--line);
+      box-shadow: var(--shadow);
+    }
+    main {
+      min-width: 0;
+      padding: 14px;
+    }
+    .tab { display: none; }
+    .tab.active { display: block; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 12px;
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-width: 0;
+      box-shadow: var(--shadow);
+    }
+    section h2 {
+      margin: 0;
+      padding: 10px 12px;
+      font-size: 14px;
+      border-bottom: 1px solid var(--line);
+      background: #f9fbfd;
+    }
+    .body { padding: 12px; }
+    .span-3 { grid-column: span 3; }
+    .span-4 { grid-column: span 4; }
+    .span-5 { grid-column: span 5; }
+    .span-6 { grid-column: span 6; }
+    .span-7 { grid-column: span 7; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: span 12; }
+    .kv {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    .kv th, .kv td {
+      padding: 7px 8px;
+      border-bottom: 1px solid #edf1f5;
+      vertical-align: top;
+      word-break: break-word;
+    }
+    .kv th {
+      width: 38%;
+      color: var(--muted);
+      text-align: left;
+      font-weight: 600;
+    }
+    .kv tr:last-child th,
+    .kv tr:last-child td { border-bottom: 0; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid var(--line);
+      background: #f8fafc;
+      white-space: nowrap;
+    }
+    .ok { color: var(--ok); border-color: #9bd5c7; background: #eefaf6; }
+    .warn { color: var(--warn); border-color: #e9c46a; background: #fff8e1; }
+    .bad { color: var(--bad); border-color: #f0a7a0; background: #fff1f0; }
+    .info { color: var(--cyan); border-color: #8bcad3; background: #eefbfc; }
+    .muted { color: var(--muted); }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 8px;
+      align-items: end;
+      margin-bottom: 10px;
+    }
+    .field { grid-column: span 4; }
+    .field.wide { grid-column: span 8; }
+    .field.full { grid-column: span 12; }
+    .field label {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .item {
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 9px 10px;
+      background: #fff;
+      min-width: 0;
+    }
+    .item-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: start;
+      margin-bottom: 5px;
+    }
+    .title {
+      font-weight: 700;
+      min-width: 0;
+      word-break: break-word;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 12px;
+      word-break: break-word;
+    }
+    .message-text {
+      margin-top: 6px;
+      white-space: pre-wrap;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+    .layout-img {
+      width: 100%;
+      max-height: 650px;
+      object-fit: contain;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+    .log {
+      margin: 0;
+      max-height: 620px;
+      overflow: auto;
+      padding: 12px;
+      background: #111827;
+      color: #e5e7eb;
+      border-radius: 6px;
+      line-height: 1.45;
+    }
+    .statusline {
+      min-height: 22px;
+      color: var(--muted);
+    }
+    @media (max-width: 960px) {
+      header { align-items: flex-start; flex-direction: column; }
+      .shell { grid-template-columns: 1fr; }
+      nav {
+        position: sticky;
+        top: 72px;
+        z-index: 9;
+        display: flex;
+        overflow-x: auto;
+        gap: 6px;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .nav-btn {
+        width: auto;
+        min-width: 110px;
+        margin: 0;
+        justify-content: center;
+      }
+      main { padding: 10px; }
+      .span-3, .span-4, .span-5, .span-6, .span-7, .span-8, .span-12,
+      .field, .field.wide, .field.full { grid-column: span 12; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>WeChat-AI Manager</h1>
+      <div id="stamp" class="header-sub">loading</div>
+    </div>
+    <div class="toolbar">
+      <button id="refresh">Refresh</button>
+      <button id="rescanDb">Rescan DB</button>
+      <button id="pauseMessages">Pause DB Poll</button>
+      <button id="resumeMessages">Resume DB Poll</button>
+    </div>
+  </header>
+  <div class="shell">
+    <nav>
+      <button class="nav-btn active" data-tab="overview">Overview</button>
+      <button class="nav-btn" data-tab="database">Database</button>
+      <button class="nav-btn" data-tab="messages">Messages</button>
+      <button class="nav-btn" data-tab="rpa">RPA</button>
+      <button class="nav-btn" data-tab="window">Window</button>
+      <button class="nav-btn" data-tab="logs">Logs</button>
+    </nav>
+    <main>
+      <div id="overview" class="tab active">
+        <div class="grid">
+          <section class="span-3"><h2>Runtime</h2><div id="runtime" class="body"></div></section>
+          <section class="span-3"><h2>Bot</h2><div id="bot" class="body"></div></section>
+          <section class="span-3"><h2>Queues</h2><div id="queues" class="body"></div></section>
+          <section class="span-3"><h2>Input</h2><div id="inputServices" class="body"></div></section>
+          <section class="span-4"><h2>Services</h2><div id="services" class="body"></div></section>
+          <section class="span-4"><h2>Processes</h2><div id="processes" class="body"></div></section>
+          <section class="span-4"><h2>Plugins</h2><div id="plugins" class="body"></div></section>
+          <section class="span-12"><h2>Database Snapshot</h2><div id="databaseOverview" class="body"></div></section>
+        </div>
+      </div>
+
+      <div id="database" class="tab">
+        <div class="grid">
+          <section class="span-5"><h2>SQLCipher</h2><div id="databaseDetail" class="body"></div></section>
+          <section class="span-7"><h2>Contact Search</h2><div class="body">
+            <div class="row">
+              <div class="field wide">
+                <label for="contactQuery">Name / remark / wxid</label>
+                <input id="contactQuery" autocomplete="off">
+              </div>
+              <div class="field">
+                <button id="searchContacts" class="primary">Search</button>
+              </div>
+            </div>
+            <div id="contactStatus" class="statusline"></div>
+            <div id="contactResults" class="list"></div>
+          </div></section>
+          <section class="span-12"><h2>Accounts</h2><div id="accountList" class="body"></div></section>
+        </div>
+      </div>
+
+      <div id="messages" class="tab">
+        <div class="grid">
+          <section class="span-4"><h2>Query</h2><div class="body">
+            <div class="row">
+              <div class="field full">
+                <label for="msgContact">Contact username or display name</label>
+                <input id="msgContact" autocomplete="off">
+              </div>
+              <div class="field full">
+                <label for="msgKeyword">Text contains</label>
+                <input id="msgKeyword" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="msgLimit">Limit</label>
+                <input id="msgLimit" type="number" min="1" max="200" value="20">
+              </div>
+              <div class="field wide actions">
+                <button id="queryMessages" class="primary">Query Text</button>
+                <button id="queryMedia">Check Media</button>
+              </div>
+            </div>
+            <div id="messageStatus" class="statusline"></div>
+          </div></section>
+          <section class="span-8"><h2>Results</h2><div class="body"><div id="messageResults" class="list"></div></div></section>
+        </div>
+      </div>
+
+      <div id="rpa" class="tab">
+        <div class="grid">
+          <section class="span-5"><h2>Send Text</h2><div class="body">
+            <div class="row">
+              <div class="field full">
+                <label for="rpaTarget">Target display name or wxid</label>
+                <input id="rpaTarget" autocomplete="off">
+              </div>
+              <div class="field full">
+                <label for="rpaAt">At user name</label>
+                <input id="rpaAt" autocomplete="off">
+              </div>
+              <div class="field full">
+                <label for="rpaContent">Content</label>
+                <textarea id="rpaContent"></textarea>
+              </div>
+              <div class="field full actions">
+                <button id="sendText" class="primary">Queue Send</button>
+              </div>
+            </div>
+            <div id="rpaStatus" class="statusline"></div>
+          </div></section>
+          <section class="span-7"><h2>RPA State</h2><div id="rpaState" class="body"></div></section>
+        </div>
+      </div>
+
+      <div id="window" class="tab">
+        <div class="grid">
+          <section class="span-5"><h2>Window</h2><div id="windowState" class="body"></div></section>
+          <section class="span-7"><h2>Layout</h2><div class="body"><img id="layout" class="layout-img" src="/debug/layout.png" alt="layout"></div></section>
+          <section class="span-12"><h2>YOLO</h2><div id="vision" class="body"></div></section>
+        </div>
+      </div>
+
+      <div id="logs" class="tab">
+        <div class="grid">
+          <section class="span-12"><h2>Bot Log</h2><div class="body">
+            <div class="actions" style="margin-bottom: 10px;">
+              <button id="loadLogs" class="primary">Reload Logs</button>
+              <select id="logLines" style="width: 120px;">
+                <option value="120">120</option>
+                <option value="240" selected>240</option>
+                <option value="500">500</option>
+              </select>
+              <span id="logPath" class="muted mono"></span>
+            </div>
+            <pre id="logText" class="log mono"></pre>
+          </div></section>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const short = (v, n = 160) => {
+      const text = String(v ?? "");
+      return text.length > n ? `${text.slice(0, n - 1)}...` : text;
+    };
+    const pill = (ok, text) => `<span class="pill ${ok ? 'ok' : 'bad'}">${esc(text)}</span>`;
+    const warn = (text) => `<span class="pill warn">${esc(text)}</span>`;
+    const info = (text) => `<span class="pill info">${esc(text)}</span>`;
+    const bool = (v) => pill(Boolean(v), v ? "yes" : "no");
+    const mono = (v) => `<span class="mono">${esc(v)}</span>`;
+    const table = (rows) => `<table class="kv"><tbody>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${v}</td></tr>`).join("")}</tbody></table>`;
+    const json = (v) => `<span class="mono">${esc(JSON.stringify(v, null, 2))}</span>`;
+    let statusData = null;
+
+    document.querySelectorAll('.nav-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.nav-btn').forEach(n => n.classList.remove('active'));
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        btn.classList.add('active');
+        $(btn.dataset.tab).classList.add('active');
+        if (btn.dataset.tab === 'logs') loadLogs().catch(showHeaderError);
+      });
+    });
+
+    async function fetchJson(url, options = {}) {
+      const res = await fetch(url, { cache: 'no-store', ...options });
+      const data = await res.json();
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.error || `${res.status} ${res.statusText}`);
+      }
+      return data;
+    }
+
+    function showHeaderError(err) {
+      $('stamp').textContent = err.message || String(err);
+    }
+
+    function renderStatus(data) {
+      statusData = data;
+      $('stamp').textContent = `updated ${new Date(data.generated_at * 1000).toLocaleString()}`;
+      $('runtime').innerHTML = table([
+        ['pid', esc(data.runtime.pid)],
+        ['uptime', esc(`${data.runtime.uptime_seconds}s`)],
+        ['python', esc(data.runtime.python)],
+        ['platform', esc(data.runtime.platform)]
+      ]);
+      $('bot').innerHTML = table([
+        ['running', bool(data.bot.running)],
+        ['chat ready', bool(data.bot.chat_window_ready)],
+        ['account', esc(data.bot.user.account || '')],
+        ['nickname', esc(data.bot.user.nickname || '')],
+        ['version', esc(data.bot.user.version || '')]
+      ]);
+      $('queues').innerHTML = table([
+        ['message', esc(data.queues.message_queue.size)],
+        ['rpa', esc(data.queues.rpa_task_queue.size)],
+        ['status', esc(data.queues.status_queue.size)]
+      ]);
+      $('inputServices').innerHTML = table([
+        ['database poll', serviceBadge(data.services.message)],
+        ['paused', bool(data.services.message.is_paused)],
+        ['visual poll', serviceBadge(data.services.visual)],
+        ['mqtt', data.services.mqtt.enabled ? bool(data.services.mqtt.connected) : warn('disabled')]
+      ]);
+      $('services').innerHTML = table([
+        ['processor', serviceBadge(data.services.processor)],
+        ['processor queue', esc(data.services.processor.queue_size ?? '')],
+        ['rpa', serviceBadge(data.services.rpa)],
+        ['rpa queue', esc(data.services.rpa.queue_size ?? '')],
+        ['db message interval', esc(data.services.message.poll_interval ?? '')],
+        ['visual interval', esc(data.services.visual.poll_interval ?? '')]
+      ]);
+      $('processes').innerHTML = table([
+        ['wechat', bool(data.processes.wechat.running)],
+        ['wechat pids', esc((data.processes.wechat.pids || []).join(', '))],
+        ['bot', bool(data.processes.bot.running)],
+        ['display', data.processes.display.ok ? info(data.processes.display.stdout) : warn(data.processes.display.stderr || 'unknown')]
+      ]);
+      $('plugins').innerHTML = `<div class="list">${(data.plugins || []).map(p => `<div class="item"><div class="item-head"><span class="title">${esc(p.name)}</span><span class="pill">${esc(p.priority)}</span></div><div class="sub mono">${esc(p.class)}</div></div>`).join("") || '<span class="muted">none</span>'}</div>`;
+      renderDatabase(data);
+      renderWindow(data);
+      $('rpaState').innerHTML = table([
+        ['running', serviceBadge(data.services.rpa)],
+        ['queue size', esc(data.services.rpa.queue_size ?? '')],
+        ['window ready', bool(data.bot.chat_window_ready)],
+        ['current session', esc(data.window.current_session || '')]
+      ]);
+      $('layout').src = `/debug/layout.png?t=${Date.now()}`;
+    }
+
+    function serviceBadge(service) {
+      if (!service || Object.keys(service).length === 0) return warn('missing');
+      const running = service.is_running ?? service.running;
+      return bool(running);
+    }
+
+    function renderDatabase(data) {
+      const db = data.database || {};
+      const discovery = db.discovery || db;
+      const available = db.available || db.can_attempt_business_database_open;
+      const rows = [
+        ['available', bool(available)],
+        ['driver', esc(db.driver || db.sqlcipher_driver || '')],
+        ['primary', esc(db.primary_account || '')],
+        ['root', esc(db.root || discovery.root || '')],
+        ['accounts', esc(db.account_count || discovery.account_count || 0)],
+        ['db files', esc(db.db_count ?? '')],
+        ['keys', esc(db.key_count ?? db.key_scan?.found_key_count ?? '')],
+        ['message tables', esc(db.message_tables ?? '')],
+        ['contacts', esc(db.contacts ?? '')],
+        ['rooms', esc(db.rooms ?? '')],
+        ['connections', esc(db.open_connections ?? '')],
+        ['last scan', esc(db.last_scan_at ? new Date(db.last_scan_at * 1000).toLocaleString() : '')],
+        ['last error', esc(db.last_error || db.error || '')]
+      ];
+      $('databaseOverview').innerHTML = table(rows.slice(0, 10));
+      $('databaseDetail').innerHTML = table(rows);
+      const accounts = discovery.accounts || [];
+      $('accountList').innerHTML = `<div class="list">${accounts.map(a => `
+        <div class="item">
+          <div class="item-head">
+            <div>
+              <div class="title">${esc(a.account)}</div>
+              <div class="sub mono">${esc(a.storage_suffix || '')}</div>
+            </div>
+            ${a.login_key_db || a.login_key_dat ? info('login key') : warn('no login key')}
+          </div>
+          <div class="sub">${esc(a.encrypted_databases)} encrypted / ${esc(a.plaintext_databases)} plain</div>
+          <div class="sub mono">${esc((a.samples || []).join(', '))}</div>
+        </div>`).join("") || '<span class="muted">no accounts</span>'}</div>`;
+    }
+
+    function renderWindow(data) {
+      $('windowState').innerHTML = table([
+        ['current window', bool(data.window.current_window)],
+        ['target size', json(data.window.target_size || {})],
+        ['actual geometry', json(data.window.actual_geometry || {})],
+        ['message region', json(data.window.message_region || [])],
+        ['session list width', esc(data.window.session_list_width || '')],
+        ['send button', json(data.window.send_button || [])],
+        ['raw screenshot', data.debug.raw_screenshot_enabled ? info('enabled') : warn('disabled')]
+      ]);
+      $('vision').innerHTML = table([
+        ['model loaded', bool(data.yolo.model_loaded)],
+        ['model path', esc(data.yolo.model_path || '')],
+        ['imgsz config', esc(data.yolo.imgsz_config || '')],
+        ['imgsz actual', json(data.yolo.imgsz_actual || '')],
+        ['stride', esc(data.yolo.stride || '')],
+        ['visual running', serviceBadge(data.services.visual)],
+        ['primed', bool(data.services.visual.primed)],
+        ['current session', esc(data.services.visual.current_session || '')],
+        ['seen visual hashes', esc(data.services.visual.seen_visual_hashes || 0)]
+      ]);
+    }
+
+    async function loadStatus() {
+      const data = await fetchJson('/debug/api/status');
+      renderStatus(data);
+    }
+
+    async function loadLogs() {
+      const lines = $('logLines').value || '240';
+      const data = await fetchJson(`/debug/api/logs?lines=${encodeURIComponent(lines)}`);
+      $('logPath').textContent = data.path || '';
+      $('logText').textContent = data.text || '';
+    }
+
+    async function rescanDb() {
+      $('stamp').textContent = 'rescanning database...';
+      await fetchJson('/debug/api/database/rescan', { method: 'POST' });
+      await loadStatus();
+    }
+
+    async function pauseMessages() {
+      await fetchJson('/debug/api/message/pause', { method: 'POST' });
+      await loadStatus();
+    }
+
+    async function resumeMessages() {
+      await fetchJson('/debug/api/message/resume', { method: 'POST' });
+      await loadStatus();
+    }
+
+    async function searchContacts() {
+      const q = $('contactQuery').value.trim();
+      if (!q) {
+        $('contactStatus').textContent = 'enter a search term';
+        $('contactResults').innerHTML = '';
+        return;
+      }
+      $('contactStatus').textContent = 'searching...';
+      const data = await fetchJson(`/debug/api/contacts?q=${encodeURIComponent(q)}&limit=50`);
+      $('contactStatus').textContent = `${data.count} result(s)`;
+      $('contactResults').innerHTML = data.contacts.map(contactItem).join("") || '<span class="muted">no matches</span>';
+    }
+
+    function contactItem(c) {
+      return `<div class="item">
+        <div class="item-head">
+          <div>
+            <div class="title">${esc(c.display_name)}</div>
+            <div class="sub mono">${esc(c.username)}</div>
+          </div>
+          ${c.is_chatroom ? info('room') : info('contact')}
+        </div>
+        <div class="sub">${esc([c.remark, c.nick_name, c.alias].filter(Boolean).join(' / '))}</div>
+        <div class="actions" style="margin-top:8px;">
+          <button data-fill-msg="${esc(c.username)}">Use for Messages</button>
+          <button data-fill-rpa="${esc(c.display_name)}">Use for RPA</button>
+        </div>
+      </div>`;
+    }
+
+    document.addEventListener('click', (event) => {
+      const msgTarget = event.target.getAttribute?.('data-fill-msg');
+      const rpaTarget = event.target.getAttribute?.('data-fill-rpa');
+      if (msgTarget) $('msgContact').value = msgTarget;
+      if (rpaTarget) $('rpaTarget').value = rpaTarget;
+    });
+
+    async function queryMessages(media = false) {
+      const contact = $('msgContact').value.trim();
+      if (!contact) {
+        $('messageStatus').textContent = 'contact is required';
+        return;
+      }
+      const limit = $('msgLimit').value || '20';
+      const keyword = $('msgKeyword').value.trim();
+      const params = new URLSearchParams({ contact, limit });
+      if (!media && keyword) params.set('query', keyword);
+      $('messageStatus').textContent = media ? 'checking media...' : 'querying...';
+      const endpoint = media ? '/debug/api/messages/media' : '/debug/api/messages';
+      const data = await fetchJson(`${endpoint}?${params.toString()}`);
+      $('messageStatus').textContent = `${data.count} result(s) from ${data.contact.display_name}`;
+      $('messageResults').innerHTML = data.messages.map(media ? mediaMessageItem : textMessageItem).join("") || '<span class="muted">no messages</span>';
+    }
+
+    function textMessageItem(m) {
+      return `<div class="item">
+        <div class="item-head">
+          <div>
+            <div class="title">${esc(m.sender_display || m.sender_username || 'unknown')}</div>
+            <div class="sub mono">${esc(m.time)} server=${esc(m.server_id)}</div>
+          </div>
+        </div>
+        <div class="message-text">${esc(m.text)}</div>
+      </div>`;
+    }
+
+    function mediaMessageItem(m) {
+      const status = m.factory_ok ? info('parsed') : warn('raw');
+      const media = ['path', 'thumb_path', 'file_name', 'file_size', 'file_type', 'md5', 'duration']
+        .filter(k => m[k] !== undefined && m[k] !== null && m[k] !== '')
+        .map(k => `<tr><th>${esc(k)}</th><td>${esc(m[k])}</td></tr>`).join("");
+      return `<div class="item">
+        <div class="item-head">
+          <div>
+            <div class="title">${esc(m.type_name)} ${esc(m.time || '')}</div>
+            <div class="sub mono">local=${esc(m.local_id)} server=${esc(m.server_id)}</div>
+          </div>
+          ${status}
+        </div>
+        <div class="message-text">${esc(m.text || m.raw_content || m.factory_error || '')}</div>
+        ${media ? `<table class="kv" style="margin-top:8px;"><tbody>${media}</tbody></table>` : ''}
+      </div>`;
+    }
+
+    async function sendText() {
+      const target = $('rpaTarget').value.trim();
+      const atUserName = $('rpaAt').value.trim();
+      const content = $('rpaContent').value;
+      $('rpaStatus').textContent = 'queueing...';
+      const data = await fetchJson('/debug/api/rpa/send_text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, content, at_user_name: atUserName })
+      });
+      $('rpaStatus').textContent = `queued for ${data.target}, queue size ${data.queue_size}`;
+      await loadStatus();
+    }
+
+    $('refresh').addEventListener('click', () => loadStatus().catch(showHeaderError));
+    $('rescanDb').addEventListener('click', () => rescanDb().catch(showHeaderError));
+    $('pauseMessages').addEventListener('click', () => pauseMessages().catch(showHeaderError));
+    $('resumeMessages').addEventListener('click', () => resumeMessages().catch(showHeaderError));
+    $('searchContacts').addEventListener('click', () => searchContacts().catch(err => $('contactStatus').textContent = err.message));
+    $('contactQuery').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') searchContacts().catch(err => $('contactStatus').textContent = err.message);
+    });
+    $('queryMessages').addEventListener('click', () => queryMessages(false).catch(err => $('messageStatus').textContent = err.message));
+    $('queryMedia').addEventListener('click', () => queryMessages(true).catch(err => $('messageStatus').textContent = err.message));
+    $('sendText').addEventListener('click', () => sendText().catch(err => $('rpaStatus').textContent = err.message));
+    $('loadLogs').addEventListener('click', () => loadLogs().catch(showHeaderError));
+    $('logLines').addEventListener('change', () => loadLogs().catch(showHeaderError));
+
+    loadStatus().catch(showHeaderError);
+    loadLogs().catch(() => {});
+    setInterval(loadStatus, 5000);
+  </script>
+</body>
+</html>

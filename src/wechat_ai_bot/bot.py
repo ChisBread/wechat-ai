@@ -20,7 +20,9 @@ from wechat_ai_bot.rpa.controller import RPAController
 from wechat_ai_bot.rpa.image_processor import ImageProcessor
 from wechat_ai_bot.rpa.xfce_window_manager import XFCEWindowManager
 from wechat_ai_bot.rpa.ocr_processor import OCRProcessor
+from wechat_ai_bot.services.core.linux_database_service import LinuxDatabaseService
 from wechat_ai_bot.services.core.message_factory_service import MessageFactoryService
+from wechat_ai_bot.services.core.message_service import MessageService
 from wechat_ai_bot.services.core.mqtt_service import MQTTService
 from wechat_ai_bot.services.core.processor_service import ProcessorService
 from wechat_ai_bot.services.core.rpa_service import RPAService
@@ -83,15 +85,33 @@ class Bot:
         self.plugin_manager = PluginManager(self)
 
         # ---- Services ----
+        database_config = self.config.get("database", {})
+        self.database_service = None
+        if database_config.get("enabled", True):
+            self.database_service = LinuxDatabaseService(
+                user_info=self.user_info,
+                xwechat_files_root=database_config.get(
+                    "xwechat_files_root", "/config/xwechat_files"
+                ),
+                scan_keys=database_config.get("scan_keys", True),
+                active_account=database_config.get("active_account", ""),
+                key_retry_interval=database_config.get("key_retry_interval", 10.0),
+                message_map_refresh_interval=database_config.get(
+                    "message_map_refresh_interval", 30.0
+                ),
+            )
+
         # Message factory (portable)
-        self.message_factory_service = MessageFactoryService(self.user_info, None)
+        self.message_factory_service = MessageFactoryService(
+            self.user_info, self.database_service
+        )
 
         # Processor (portable)
         self.processor_service = ProcessorService(
             user_info=self.user_info,
             message_queue=self.message_queue,
             rpa_task_queue=self.rpa_task_queue,
-            db=None,
+            db=self.database_service,
             message_factory_service=self.message_factory_service,
             plugin_manager=self.plugin_manager,
         )
@@ -99,7 +119,15 @@ class Bot:
         # RPA service (portable)
         self.rpa_service = RPAService(self.rpa_task_queue, self.rpa_controller)
 
-        # Visual message service (Linux-native, replaces DatabaseService)
+        # Database message service (preferred) and visual fallback.
+        self.message_service = None
+        if self.database_service:
+            self.message_service = MessageService(
+                self.message_queue,
+                self.database_service,
+                poll_interval=database_config.get("poll_interval", 0.75),
+            )
+
         visual_config = self.config.get("visual_message", {})
         self.visual_message_service = VisualMessageService(
             window_manager=self.window_manager,
@@ -128,7 +156,7 @@ class Bot:
         if mqtt_config.get("host") and mqtt_config.get("port"):
             self.mqtt_service = MQTTService(
                 user_info=self.user_info,
-                db=None,
+                db=self.database_service,
                 rpa_task_queue=self.rpa_task_queue,
                 mqtt_config=mqtt_config,
             )
@@ -141,10 +169,13 @@ class Bot:
             self.image_processor,
             self.ocr_processor,
             self.plugin_manager,
+        ]
+        if self.database_service:
+            self._components.append(self.database_service)
+        self._components.extend([
             self.processor_service,
             self.rpa_service,
-            self.visual_message_service,
-        ]
+        ])
         if self.mqtt_service:
             self._components.append(self.mqtt_service)
 
@@ -154,17 +185,15 @@ class Bot:
         self.logger.info("WeChat-AI Bot initialized (Linux)")
         self.logger.info(f"  User: {self.user_info.nickname}")
         self.logger.info(f"  MCP port: {os.environ.get('MCP_PORT') or self.config.get('mcp.port', 8000)}")
-        self.logger.info(f"  Visual poll interval: {visual_config.get('poll_interval', 2.0)}s")
+        self.logger.info(f"  Database enabled: {bool(self.database_service)}")
+        self.logger.info(f"  Visual fallback: {visual_config.get('fallback_when_database_unavailable', True)}")
         self.logger.info("=" * 60)
 
     def setup(self):
         """Initialize all components. Blocking operations (window init, etc.)."""
         self.logger.info("--- Bot Setup Start ---")
 
-        # Plugin loading
-        self.plugin_manager.setup()
-
-        # Start all services
+        # Set up core services first; message input is selected after DB status is known.
         for component in self._components:
             name = component.__class__.__name__
             try:
@@ -173,6 +202,8 @@ class Bot:
                     self.logger.info(f"  {name}: setup complete")
             except Exception as e:
                 self.logger.error(f"  {name}: setup failed: {e}")
+
+        self._select_message_input_services()
 
         self.is_running = True
         self._start_window_init_loop()
@@ -187,6 +218,47 @@ class Bot:
                 self.logger.error(f"  {name}: start failed: {e}")
 
         self.logger.info("--- Bot Setup Complete ---")
+
+    def _select_message_input_services(self):
+        visual_config = self.config.get("visual_message", {})
+        selected = []
+        database_ready = bool(
+            self.database_service and getattr(self.database_service, "is_available", False)
+        )
+        force_visual = bool(visual_config.get("enabled", False))
+        visual_fallback = bool(
+            visual_config.get("fallback_when_database_unavailable", True)
+        )
+
+        if database_ready and self.message_service:
+            selected.append(self.message_service)
+            self.logger.info("Message input: database")
+        elif self.database_service:
+            self.logger.warning(
+                "Database message input unavailable: %s",
+                getattr(self.database_service, "last_error", "unknown"),
+            )
+
+        if force_visual or (not database_ready and visual_fallback):
+            selected.append(self.visual_message_service)
+            self.logger.info(
+                "Message input: visual%s",
+                " (forced)" if force_visual and database_ready else " fallback",
+            )
+
+        if not selected:
+            self.logger.warning("No message input service selected")
+
+        for component in selected:
+            if component not in self._components:
+                self._components.append(component)
+            name = component.__class__.__name__
+            try:
+                if hasattr(component, "setup"):
+                    component.setup()
+                    self.logger.info(f"  {name}: setup complete")
+            except Exception as e:
+                self.logger.error(f"  {name}: setup failed: {e}")
 
     def _start_window_init_loop(self):
         self._window_init_thread = threading.Thread(

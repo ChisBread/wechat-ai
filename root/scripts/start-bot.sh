@@ -3,7 +3,7 @@
 BOT_LOG="/config/logs/bot.log"
 BOT_PYTHON="/opt/venv-bot/bin/python"
 BOT_CONFIG="${BOT_CONFIG_PATH:-/config/config.yaml}"
-BOT_USER="${BOT_RUN_USER:-abc}"
+BOT_USER="${BOT_RUN_USER:-root}"
 
 mkdir -p /config/logs /config/runtime_images /config/.config/Ultralytics
 
@@ -24,7 +24,13 @@ done
 cd /app
 while true; do
     echo "[bot] $(date): Starting bot as ${BOT_USER} on DISPLAY=${DISPLAY:-unset}..." | tee -a "$BOT_LOG"
-    sudo -u "$BOT_USER" env \
+    if [ "$BOT_USER" = "root" ]; then
+        RUN_PREFIX=()
+    else
+        RUN_PREFIX=(sudo -u "$BOT_USER")
+    fi
+    "${RUN_PREFIX[@]}" env \
+        HOME="${HOME:-/config}" \
         DISPLAY="${DISPLAY:-:1}" \
         XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/config/.XDG}" \
         QT_AUTO_SCREEN_SCALE_FACTOR="${QT_AUTO_SCREEN_SCALE_FACTOR:-0}" \

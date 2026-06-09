@@ -7,7 +7,6 @@ opened with the current Python environment.
 """
 
 import importlib.util
-import shutil
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -114,12 +113,8 @@ class LinuxDatabaseDiscovery:
         return account_id or dirname, suffix
 
     def _sqlcipher_driver(self) -> str:
-        if importlib.util.find_spec("pysqlcipher3") is not None:
-            return "pysqlcipher3"
         if importlib.util.find_spec("sqlcipher3") is not None:
             return "sqlcipher3"
-        if importlib.util.find_spec("apsw") is not None:
-            return "apsw"
-        if shutil.which("sqlcipher"):
-            return "sqlcipher-cli"
+        if importlib.util.find_spec("pysqlcipher3") is not None:
+            return "pysqlcipher3"
         return ""

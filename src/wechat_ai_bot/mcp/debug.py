@@ -1,14 +1,16 @@
-"""Read-only management and debug routes for the bot runtime."""
+"""Management and debug routes for the bot runtime."""
 
 from __future__ import annotations
 
 import io
+import hashlib
 import os
 import platform
 import re
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -19,22 +21,192 @@ from wechat_ai_bot.services.core.linux_database_discovery import LinuxDatabaseDi
 
 
 def register_debug_routes(mcp: Any, bot: Any, config: Any) -> None:
-    """Register read-only debug routes on a FastMCP instance."""
+    """Register manager/debug routes on a FastMCP instance."""
     from starlette.requests import Request
     from starlette.responses import JSONResponse, PlainTextResponse, Response
 
     @mcp.custom_route("/debug", methods=["GET"], include_in_schema=False)
     async def debug_page(request: Request) -> Response:
-        return Response(DEBUG_HTML, media_type="text/html; charset=utf-8")
+        return Response(_debug_html(), media_type="text/html; charset=utf-8")
 
     @mcp.custom_route("/debug/", methods=["GET"], include_in_schema=False)
     async def debug_page_slash(request: Request) -> Response:
-        return Response(DEBUG_HTML, media_type="text/html; charset=utf-8")
+        return Response(_debug_html(), media_type="text/html; charset=utf-8")
 
     @mcp.custom_route("/debug/api/status", methods=["GET"], include_in_schema=False)
     async def debug_status(request: Request) -> JSONResponse:
         show_sensitive = bool(_config_get(config, "debug.show_sensitive", False))
         return JSONResponse(build_debug_status(bot, config, show_sensitive=show_sensitive))
+
+    @mcp.custom_route("/debug/api/database/rescan", methods=["POST"], include_in_schema=False)
+    async def debug_database_rescan(request: Request) -> JSONResponse:
+        database_service = getattr(bot, "database_service", None)
+        if not database_service or not hasattr(database_service, "refresh"):
+            return JSONResponse({"ok": False, "error": "database service unavailable"}, status_code=503)
+        try:
+            status = database_service.refresh()
+            return JSONResponse({"ok": True, "database": status})
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"},
+                status_code=500,
+            )
+
+    @mcp.custom_route("/debug/api/message/pause", methods=["POST"], include_in_schema=False)
+    async def debug_message_pause(request: Request) -> JSONResponse:
+        message_service = getattr(bot, "message_service", None)
+        if not message_service or not hasattr(message_service, "pause"):
+            return JSONResponse({"ok": False, "error": "message service unavailable"}, status_code=503)
+        message_service.pause()
+        return JSONResponse({"ok": True, "message": _call_status(message_service)})
+
+    @mcp.custom_route("/debug/api/message/resume", methods=["POST"], include_in_schema=False)
+    async def debug_message_resume(request: Request) -> JSONResponse:
+        message_service = getattr(bot, "message_service", None)
+        if not message_service or not hasattr(message_service, "resume"):
+            return JSONResponse({"ok": False, "error": "message service unavailable"}, status_code=503)
+        message_service.resume()
+        return JSONResponse({"ok": True, "message": _call_status(message_service)})
+
+    @mcp.custom_route("/debug/api/contacts", methods=["GET"], include_in_schema=False)
+    async def debug_contacts(request: Request) -> JSONResponse:
+        database_service = getattr(bot, "database_service", None)
+        if not database_service or not getattr(database_service, "is_available", False):
+            return JSONResponse({"ok": False, "error": "database service unavailable"}, status_code=503)
+        query = str(request.query_params.get("q", "")).strip()
+        try:
+            limit = int(request.query_params.get("limit", "30"))
+        except ValueError:
+            limit = 30
+        limit = max(1, min(limit, 100))
+        contacts = _search_contacts(database_service, query, limit=limit)
+        return JSONResponse(
+            {
+                "ok": True,
+                "query": query,
+                "count": len(contacts),
+                "contacts": [_contact_payload(contact) for contact in contacts],
+            }
+        )
+
+    @mcp.custom_route("/debug/api/messages", methods=["GET"], include_in_schema=False)
+    async def debug_messages(request: Request) -> JSONResponse:
+        database_service = getattr(bot, "database_service", None)
+        if not database_service or not getattr(database_service, "is_available", False):
+            return JSONResponse({"ok": False, "error": "database service unavailable"}, status_code=503)
+        username = str(request.query_params.get("username", "")).strip()
+        contact_name = str(request.query_params.get("contact", "")).strip()
+        contact = _resolve_contact(database_service, username or contact_name)
+        if not contact:
+            return JSONResponse({"ok": False, "error": "contact not found"}, status_code=404)
+        try:
+            limit = int(request.query_params.get("limit", "20"))
+        except ValueError:
+            limit = 20
+        limit = max(1, min(limit, 200))
+        query = str(request.query_params.get("query", "")).strip() or None
+        try:
+            messages = database_service.query_text_messages(
+                username=contact.username,
+                query=query,
+                limit=limit,
+            )
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"},
+                status_code=500,
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "contact": _contact_payload(contact),
+                "count": len(messages),
+                "messages": [
+                    _text_message_payload(database_service, row)
+                    for row in messages
+                ],
+            }
+        )
+
+    @mcp.custom_route("/debug/api/messages/media", methods=["GET"], include_in_schema=False)
+    async def debug_media_messages(request: Request) -> JSONResponse:
+        database_service = getattr(bot, "database_service", None)
+        if not database_service or not getattr(database_service, "is_available", False):
+            return JSONResponse({"ok": False, "error": "database service unavailable"}, status_code=503)
+        username = str(request.query_params.get("username", "")).strip()
+        contact_name = str(request.query_params.get("contact", "")).strip()
+        contact = _resolve_contact(database_service, username or contact_name)
+        if not contact:
+            return JSONResponse({"ok": False, "error": "contact not found"}, status_code=404)
+        try:
+            limit = int(request.query_params.get("limit", "12"))
+        except ValueError:
+            limit = 12
+        limit = max(1, min(limit, 50))
+        factory_service = getattr(bot, "message_factory_service", None)
+        try:
+            raw_rows = database_service.get_messages_by_username(contact.username, count=limit)
+            messages = [
+                _factory_message_payload(factory_service, table_name, row)
+                for table_name, row in _rows_with_table(database_service, contact.username, raw_rows)
+            ]
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"},
+                status_code=500,
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "contact": _contact_payload(contact),
+                "count": len(messages),
+                "messages": messages,
+            }
+        )
+
+    @mcp.custom_route("/debug/api/rpa/send_text", methods=["POST"], include_in_schema=False)
+    async def debug_rpa_send_text(request: Request) -> JSONResponse:
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "invalid json body"}, status_code=400)
+        target = str(payload.get("target") or payload.get("recipient_name") or "").strip()
+        content = str(payload.get("content") or payload.get("message") or "")
+        at_user_name = str(payload.get("at_user_name") or "").strip() or None
+        if not target:
+            return JSONResponse({"ok": False, "error": "target is required"}, status_code=400)
+        if not content:
+            return JSONResponse({"ok": False, "error": "content is required"}, status_code=400)
+
+        database_service = getattr(bot, "database_service", None)
+        contact = _resolve_contact(database_service, target) if database_service else None
+        resolved_target = contact.display_name if contact else target
+        try:
+            from wechat_ai_bot.rpa.action_handlers import SendTextMessageAction
+        except ImportError as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"SendTextMessageAction unavailable: {exc}"},
+                status_code=503,
+            )
+        queue = getattr(bot, "rpa_task_queue", None)
+        if queue is None:
+            return JSONResponse({"ok": False, "error": "rpa queue unavailable"}, status_code=503)
+        action = SendTextMessageAction(
+            content=content,
+            target=resolved_target,
+            is_chatroom=bool(contact and contact.is_chatroom),
+            at_user_name=at_user_name,
+        )
+        queue.put(action)
+        return JSONResponse(
+            {
+                "ok": True,
+                "queued": True,
+                "target": resolved_target,
+                "contact": _contact_payload(contact) if contact else None,
+                "queue_size": queue.qsize(),
+            }
+        )
 
     @mcp.custom_route("/debug/api/logs", methods=["GET"], include_in_schema=False)
     async def debug_logs(request: Request) -> JSONResponse:
@@ -80,12 +252,17 @@ def build_debug_status(
     window_manager = getattr(bot, "window_manager", None)
     image_processor = getattr(bot, "image_processor", None)
     visual_service = getattr(bot, "visual_message_service", None)
+    message_service = getattr(bot, "message_service", None)
     processor_service = getattr(bot, "processor_service", None)
     rpa_service = getattr(bot, "rpa_service", None)
     plugin_manager = getattr(bot, "plugin_manager", None)
     mqtt_service = getattr(bot, "mqtt_service", None)
+    database_service = getattr(bot, "database_service", None)
 
-    db_report = _database_status(_config_get(config, "debug.xwechat_files_root", "/config/xwechat_files"))
+    db_report = _database_status(
+        _config_get(config, "debug.xwechat_files_root", "/config/xwechat_files"),
+        database_service,
+    )
 
     return {
         "generated_at": int(now),
@@ -104,6 +281,7 @@ def build_debug_status(
         "processes": _process_status(),
         "queues": get_queue_stats(),
         "services": {
+            "message": _call_status(message_service),
             "processor": _call_status(processor_service),
             "rpa": _call_status(rpa_service),
             "visual": _visual_status(visual_service, show_sensitive),
@@ -230,7 +408,190 @@ def redact_text(text: str) -> str:
     return redacted
 
 
-def _database_status(root: str) -> dict[str, Any]:
+def _resolve_contact(database_service: Any, name: str) -> Any:
+    if not database_service or not name:
+        return None
+    try:
+        contact = database_service.get_contact_by_username(name)
+    except Exception:
+        contact = None
+    if contact:
+        return contact
+    try:
+        matches = database_service.get_contact_by_display_name(name)
+    except Exception:
+        matches = []
+    return matches[0] if matches else None
+
+
+def _search_contacts(database_service: Any, query: str, *, limit: int) -> list[Any]:
+    if not database_service or not query:
+        return []
+    results: list[Any] = []
+    direct = _resolve_contact(database_service, query)
+    if direct:
+        results.append(direct)
+    try:
+        results.extend(database_service.get_contact_by_display_name(query))
+    except Exception:
+        pass
+
+    # Manager-only fallback for broad fuzzy inspection across the in-memory cache.
+    needle = query.lower()
+    cache = getattr(database_service, "_contact_by_username", {}) or {}
+    for contact in cache.values():
+        fields = [
+            getattr(contact, "username", ""),
+            getattr(contact, "display_name", ""),
+            getattr(contact, "remark", ""),
+            getattr(contact, "nick_name", ""),
+            getattr(contact, "alias", ""),
+        ]
+        if any(needle in str(value).lower() for value in fields if value):
+            results.append(contact)
+
+    deduped: list[Any] = []
+    seen: set[str] = set()
+    for contact in results:
+        username = str(getattr(contact, "username", "") or "")
+        if not username or username in seen:
+            continue
+        seen.add(username)
+        deduped.append(contact)
+        if len(deduped) >= limit:
+            break
+    return deduped
+
+
+def _contact_payload(contact: Any) -> dict[str, Any]:
+    if not contact:
+        return {}
+    username = str(getattr(contact, "username", "") or "")
+    return {
+        "id": getattr(contact, "id", None),
+        "username": username,
+        "display_name": str(getattr(contact, "display_name", "") or username),
+        "remark": str(getattr(contact, "remark", "") or ""),
+        "nick_name": str(getattr(contact, "nick_name", "") or ""),
+        "alias": str(getattr(contact, "alias", "") or ""),
+        "is_chatroom": bool(getattr(contact, "is_chatroom", False)),
+        "local_type": getattr(contact, "local_type", None),
+    }
+
+
+def _text_message_payload(database_service: Any, row: tuple) -> dict[str, Any]:
+    content, sender_username, db_path, create_time, server_id = row
+    sender = None
+    try:
+        sender = database_service.get_contact_by_username(sender_username)
+    except Exception:
+        pass
+    return {
+        "text": _truncate_text(str(content or ""), 4000),
+        "sender_username": sender_username or "",
+        "sender_display": getattr(sender, "display_name", "") if sender else sender_username or "",
+        "db_path": str(db_path or ""),
+        "create_time": create_time,
+        "time": _format_timestamp(create_time),
+        "server_id": str(server_id or ""),
+    }
+
+
+def _rows_with_table(database_service: Any, username: str, rows: list[tuple]) -> list[tuple[str, tuple]]:
+    table_name = f"Msg_{hashlib.md5(username.encode()).hexdigest()}"
+    return [(table_name, row) for row in rows]
+
+
+def _factory_message_payload(factory_service: Any, table_name: str, row: tuple) -> dict[str, Any]:
+    local_type = row[2] if len(row) > 2 else None
+    payload: dict[str, Any] = {
+        "local_id": row[0] if len(row) > 0 else None,
+        "server_id": str(row[1] if len(row) > 1 else ""),
+        "type": local_type,
+        "type_name": _message_type_name(local_type),
+        "create_time": row[5] if len(row) > 5 else None,
+        "time": _format_timestamp(row[5] if len(row) > 5 else None),
+        "db_path": str(row[17] if len(row) > 17 else ""),
+        "factory_ok": False,
+    }
+    if not factory_service:
+        payload["factory_error"] = "message factory service unavailable"
+        payload["raw_content"] = _truncate_text(str(row[12] if len(row) > 12 else ""), 800)
+        return payload
+    try:
+        message = factory_service.create_message((table_name, row))
+    except Exception as exc:
+        payload["factory_error"] = f"{type(exc).__name__}: {exc}"
+        payload["raw_content"] = _truncate_text(str(row[12] if len(row) > 12 else ""), 800)
+        return payload
+    if not message:
+        payload["factory_error"] = "unsupported message type"
+        payload["raw_content"] = _truncate_text(str(row[12] if len(row) > 12 else ""), 800)
+        return payload
+
+    payload["factory_ok"] = True
+    payload["text"] = _message_text(message)
+    payload["sender_display"] = getattr(getattr(message, "contact", None), "display_name", "")
+    payload["room_display"] = getattr(getattr(message, "room", None), "display_name", "")
+    for key in ("path", "thumb_path", "file_name", "file_size", "file_type", "md5", "duration"):
+        if hasattr(message, key):
+            value = getattr(message, key)
+            if isinstance(value, (bytes, bytearray)):
+                continue
+            payload[key] = str(value) if isinstance(value, Path) else value
+    return payload
+
+
+def _message_text(message: Any) -> str:
+    try:
+        text = message.to_text()
+    except Exception:
+        text = getattr(message, "content", "") or getattr(message, "message_content", "")
+    return _truncate_text(str(text or ""), 1200)
+
+
+def _message_type_name(local_type: Any) -> str:
+    try:
+        from wechat_ai_bot.weixin.message_classes import MessageType
+
+        return MessageType.name(local_type)
+    except Exception:
+        return str(local_type or "")
+
+
+def _format_timestamp(value: Any) -> str:
+    try:
+        timestamp = int(value or 0)
+    except (TypeError, ValueError):
+        return ""
+    if timestamp <= 0:
+        return ""
+    if timestamp > 10_000_000_000:
+        timestamp = timestamp // 1000
+    try:
+        return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return ""
+
+
+def _truncate_text(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)] + "..."
+
+
+def _database_status(root: str, database_service: Any = None) -> dict[str, Any]:
+    if database_service and hasattr(database_service, "get_status"):
+        try:
+            status = database_service.get_status()
+            status["discovery"] = _database_discovery_status(root)
+            return status
+        except Exception as exc:
+            return {"error": f"{type(exc).__name__}: {exc}"}
+    return _database_discovery_status(root)
+
+
+def _database_discovery_status(root: str) -> dict[str, Any]:
     try:
         report = LinuxDatabaseDiscovery(root).scan()
         accounts = []
@@ -422,6 +783,14 @@ def mask_value(value: str, *, keep_start: int = 2, keep_end: int = 2) -> str:
     return f"{value[:keep_start]}***{value[-keep_end:]}"
 
 
+def _debug_html() -> str:
+    html_path = Path(__file__).with_name("debug.html")
+    try:
+        return html_path.read_text(encoding="utf-8")
+    except OSError:
+        return DEBUG_HTML
+
+
 DEBUG_HTML = """<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -557,6 +926,7 @@ DEBUG_HTML = """<!doctype html>
     <div class="toolbar">
       <span id="stamp" class="muted">loading</span>
       <button id="refresh">Refresh</button>
+      <button id="rescanDb">Rescan DB</button>
       <button id="logs">Logs</button>
     </div>
   </header>
@@ -615,12 +985,19 @@ DEBUG_HTML = """<!doctype html>
         ['seen hashes', esc(data.services.visual.seen_visual_hashes || 0)]
       ]);
       $('database').innerHTML = table([
-        ['root', esc(data.database.root || '')],
+        ['available', bool(data.database.available || data.database.can_attempt_business_database_open)],
+        ['driver', esc(data.database.driver || data.database.sqlcipher_driver || '')],
+        ['primary', esc(data.database.primary_account || '')],
         ['accounts', esc(data.database.account_count || 0)],
-        ['sqlcipher', data.database.sqlcipher_available ? pill(true, data.database.sqlcipher_driver || 'available') : warn('missing')],
-        ['open ready', bool(data.database.can_attempt_business_database_open)]
-      ]) + `<div class="list">${(data.database.accounts || []).map(a => `<div class="rowline"><span>${esc(a.account)}</span><span class="mono">${esc(a.encrypted_databases)} enc / ${esc(a.plaintext_databases)} plain</span></div>`).join("")}</div>`;
+        ['keys', esc(data.database.key_count ?? data.database.key_scan?.found_key_count ?? '')],
+        ['message tables', esc(data.database.message_tables ?? '')],
+        ['contacts', esc(data.database.contacts ?? '')],
+        ['rooms', esc(data.database.rooms ?? '')],
+        ['last error', esc(data.database.last_error || data.database.error || '')]
+      ]) + `<div class="list">${((data.database.discovery || data.database).accounts || []).map(a => `<div class="rowline"><span>${esc(a.account)}</span><span class="mono">${esc(a.encrypted_databases)} enc / ${esc(a.plaintext_databases)} plain</span></div>`).join("")}</div>`;
       $('services').innerHTML = table([
+        ['db message', bool(data.services.message.is_running)],
+        ['db message queue', esc(data.services.message.queue_size ?? '')],
         ['processor', bool(data.services.processor.is_running)],
         ['processor queue', esc(data.services.processor.queue_size ?? '')],
         ['rpa', bool(data.services.rpa.is_running)],
@@ -641,7 +1018,15 @@ DEBUG_HTML = """<!doctype html>
       const data = await res.json();
       $('logText').textContent = data.text || '';
     }
+    async function rescanDb() {
+      $('stamp').textContent = 'rescanning database...';
+      const res = await fetch('/debug/api/database/rescan', { method: 'POST', cache: 'no-store' });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'database rescan failed');
+      await loadStatus();
+    }
     $('refresh').addEventListener('click', loadStatus);
+    $('rescanDb').addEventListener('click', () => rescanDb().catch(err => { $('stamp').textContent = err.message; }));
     $('logs').addEventListener('click', loadLogs);
     loadStatus().catch(err => { $('stamp').textContent = err.message; });
     loadLogs().catch(() => {});

@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 MCP Server for WeChat-AI Bot (Linux).
-Adapted from omni-bot-sdk: removed DatabaseService dependency.
-Contact lookups use config-driven data for MVP.
+Adapted from omni-bot-sdk for Linux WeChat + SQLCipher DB access.
 """
 
 import functools
@@ -138,7 +137,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         You are a WeChat assistant powered by WeChat-AI Bot (Linux).
         - Send text messages via RPA automation.
         - Manage group chats and members.
-        Note: Message query is limited without direct DB access.
+        - Query message history through read-only Linux WeChat SQLCipher DB access.
         Use exact nicknames or WeChat IDs when calling tools.
         """,
         lifespan=lifespan_handler,
@@ -152,6 +151,19 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
 
     # --- Tool Functions ---
 
+    def _database_service() -> Any:
+        return getattr(bot, "database_service", None) if bot is not None else None
+
+    def _resolve_contact_name(name: str) -> Any:
+        db = _database_service()
+        if not db or not getattr(db, "is_available", False):
+            return None
+        contact = db.get_contact_by_username(name)
+        if contact:
+            return contact
+        matches = db.get_contact_by_display_name(name)
+        return matches[0] if matches else None
+
     @mcp.tool()
     @handle_tool_exceptions
     def get_timestamp(ctx: Context) -> int:
@@ -164,11 +176,12 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         """Get current WeChat user info (sensitive fields masked)."""
         app_context = _get_app_context_from_request(ctx)
         user_info_dict = asdict(app_context.userinfo)
-        for key in ["alias", "account", "phone", "data_dir", "key"]:
+        for key in ["alias", "account", "phone", "data_dir", "key", "dbkey", "dat_key"]:
             if user_info_dict.get(key) and len(str(user_info_dict[key])) > 1:
                 user_info_dict[key] = str(user_info_dict[key])[0] + "*" * (
                     len(str(user_info_dict[key])) - 1
                 )
+        user_info_dict["raw_keys"] = {}
         user_info_dict["db_keys"] = {}
         return json.dumps(user_info_dict, ensure_ascii=False, indent=4)
 
@@ -184,16 +197,53 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
     ) -> str:
         """
         Query WeChat message history.
-        NOTE: On Linux MVP, direct DB access is not available.
-        This will be supported in a future update with DB-level reading.
+        Supports WeChat ID, nickname/remark fuzzy match, text keyword, and time range.
         """
-        return json.dumps({
-            "status": "unavailable",
-            "message": "Direct message query is not available on Linux MVP. "
-                       "Visual message reading only supports real-time messages from the active chat window. "
-                       "Historical message queries will be supported when Linux WeChat DB access is implemented.",
-            "suggestion": "Use the visual message polling feature for real-time message detection.",
-        }, ensure_ascii=False)
+        db = getattr(bot, "database_service", None) if bot is not None else None
+        if not db or not getattr(db, "is_available", False):
+            return json.dumps(
+                {
+                    "status": "unavailable",
+                    "message": "Linux WeChat database service is not available.",
+                    "detail": getattr(db, "last_error", "") if db else "db service missing",
+                },
+                ensure_ascii=False,
+            )
+
+        contact = db.get_contact_by_username(contact_name)
+        if not contact:
+            matches = db.get_contact_by_display_name(contact_name)
+            contact = matches[0] if matches else None
+        if not contact:
+            return json.dumps(
+                {
+                    "status": "not_found",
+                    "message": f"未找到联系人或群聊: {contact_name}",
+                },
+                ensure_ascii=False,
+            )
+
+        msg_list = db.query_text_messages(
+            username=contact.username,
+            query=query,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            limit=limit or 500,
+        )
+        msg_list.reverse()
+        processed = []
+        for content, sender_username, _db_path, create_time, server_id in msg_list:
+            sender = db.get_contact_by_username(sender_username)
+            processed.append(
+                {
+                    "from": sender.display_name if sender else sender_username or "未知发件人",
+                    "text": content,
+                    "create_time": create_time,
+                    "server_id": str(server_id),
+                }
+            )
+        logger.info("为 '%s' 查询到 %s 条文本消息", contact.display_name, len(processed))
+        return json.dumps(processed, ensure_ascii=False, indent=None)
 
     @mcp.tool()
     @handle_tool_exceptions
@@ -209,19 +259,24 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         """
         app_context = _get_app_context_from_request(ctx)
 
-        # Simple heuristic: if name contains "群" or "group", treat as chatroom
-        is_chatroom = "群" in recipient_name or "group" in recipient_name.lower()
-        # Generate a simple username hash
-        username = hashlib.md5(recipient_name.encode()).hexdigest()
-        if is_chatroom:
-            username += "@chatroom"
+        recipient = _resolve_contact_name(recipient_name)
+        if recipient:
+            username = recipient.username
+            nickname = recipient.display_name
+            is_chatroom = recipient.username.endswith("@chatroom")
+        else:
+            is_chatroom = "群" in recipient_name or "group" in recipient_name.lower()
+            username = hashlib.md5(recipient_name.encode()).hexdigest()
+            if is_chatroom:
+                username += "@chatroom"
+            nickname = recipient_name
 
         topic = f"msg/{app_context.userinfo.account}/rpa_action"
         payload = {
             "local_type": MessageType.Text,
             "message_content": message,
             "username": username,
-            "nickname": recipient_name,
+            "nickname": nickname,
             "at_list": [at_user_name] if at_user_name else [],
             "is_chatroom": is_chatroom,
             "create_time": int(time.time()),
@@ -235,17 +290,24 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         """Send a file to a user or group via RPA."""
         app_context = _get_app_context_from_request(ctx)
 
-        is_chatroom = "群" in recipient_name
-        username = hashlib.md5(recipient_name.encode()).hexdigest()
-        if is_chatroom:
-            username += "@chatroom"
+        recipient = _resolve_contact_name(recipient_name)
+        if recipient:
+            username = recipient.username
+            nickname = recipient.display_name
+            is_chatroom = recipient.username.endswith("@chatroom")
+        else:
+            is_chatroom = "群" in recipient_name
+            username = hashlib.md5(recipient_name.encode()).hexdigest()
+            if is_chatroom:
+                username += "@chatroom"
+            nickname = recipient_name
 
         topic = f"msg/{app_context.userinfo.account}/rpa_action"
         payload = {
             "local_type": MessageType.File,
             "message_content": "",
             "username": username,
-            "nickname": recipient_name,
+            "nickname": nickname,
             "file": file_path,
             "is_chatroom": is_chatroom,
             "create_time": int(time.time()),
@@ -262,15 +324,22 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         app_context = _get_app_context_from_request(ctx)
 
         if room_name:
-            target = room_name
+            room = _resolve_contact_name(room_name)
+            target = room.display_name if room else room_name
             is_chatroom = True
         else:
-            target = user_name
-            is_chatroom = False
+            target_contact = _resolve_contact_name(user_name)
+            target = target_contact.display_name if target_contact else user_name
+            is_chatroom = bool(target_contact and target_contact.username.endswith("@chatroom"))
 
-        username = hashlib.md5(target.encode()).hexdigest()
-        if is_chatroom:
-            username += "@chatroom"
+        recipient = _resolve_contact_name(target)
+        if recipient:
+            username = recipient.username
+            is_chatroom = recipient.username.endswith("@chatroom")
+        else:
+            username = hashlib.md5(target.encode()).hexdigest()
+            if is_chatroom:
+                username += "@chatroom"
 
         topic = f"msg/{app_context.userinfo.account}/rpa_action"
         payload = {
@@ -309,13 +378,31 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
     @mcp.tool()
     @handle_tool_exceptions
     def query_room_member_list(ctx: Context, room_name: str) -> str:
-        """Query group member list. Limited on Linux MVP."""
-        return json.dumps({
-            "status": "limited",
-            "message": "Room member list query is limited on Linux MVP without DB access. "
-                       "Use RPA-based visual scanning for member discovery.",
-            "room": room_name,
-        }, ensure_ascii=False)
+        """Query group member list from the Linux WeChat contact DB."""
+        db = _database_service()
+        if not db or not getattr(db, "is_available", False):
+            return json.dumps(
+                {"status": "unavailable", "message": "database service unavailable"},
+                ensure_ascii=False,
+            )
+        room = _resolve_contact_name(room_name)
+        if not room or not room.username.endswith("@chatroom"):
+            return json.dumps(
+                {"status": "not_found", "message": f"未找到群聊: {room_name}"},
+                ensure_ascii=False,
+            )
+        members = db.get_room_member_list(room.username)
+        return json.dumps(
+            [
+                {
+                    "username": member.username,
+                    "display_name": member.display_name,
+                    "remark": member.remark,
+                }
+                for member in members
+            ],
+            ensure_ascii=False,
+        )
 
     @mcp.tool()
     @handle_tool_exceptions

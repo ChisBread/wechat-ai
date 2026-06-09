@@ -93,18 +93,23 @@ Container: wechat-ai
 +----------------------------------------------------+
 ```
 
-## Linux 微信数据库状态
+## Linux 微信数据库
 
-当前实时消息读取走视觉通道。Linux 微信 4.x 的数据位于
+实时消息读取优先走 Linux 微信数据库，视觉读取作为兜底。Linux 微信 4.x 的数据位于
 `/config/xwechat_files/<account>_<suffix>/db_storage/`，按
-`message/contact/session/...` 分库；这些业务 `.db` 文件不是普通
-`SQLite format 3` 文件头，标准库 `sqlite3` 不能直接打开。
+`message/contact/session/hardlink/...` 分库；业务 `.db` 是 SQLCipher 库，标准库
+`sqlite3` 不能直接打开。
 
-`/config/xwechat_files/all_users/login/<account>/key_info.db` 是明文 SQLite，
-包含 `LoginKeyInfoTable(user_name_md5, key_md5, key_info_md5, key_info_data)`。
-项目已加入 `LinuxDatabaseDiscovery` 用于只读发现账号目录、业务库路径、key
-元数据形态和本地 SQLCipher 能力。镜像内包含系统 `sqlcipher` CLI；后续拿到
-正确 key/PRAGMA 后，可先用 CLI fallback 验证打开业务库，再替换或补充视觉读取。
+项目使用 Python 驱动 `sqlcipher3-binary`，不依赖系统 `sqlcipher` CLI。启动时
+`LinuxDatabaseService` 会只读发现账号目录，扫描 WeChat 进程内存中的 SQLCipher raw
+key，并用每个 DB 首页 HMAC 验证；key 只保存在 bot 进程内存，不落盘。DB 成功后，
+`MessageService` 会轮询 `Msg_*` 表的新 `local_id`，并把文本、图片、视频等消息按
+example 的 tuple 形态送入现有 message factory。图片/视频路径通过
+`hardlink/hardlink.db` 和 `msg/attach`、`msg/video` 目录解析。
+
+默认 `start-bot.sh` 以 root 启动 bot，是为了读取 `/proc/<wechat-pid>/mem`；WeChat 和
+X11/Selkies 仍按 `abc` 会话运行。若设置 `BOT_RUN_USER=abc`，数据库 key 扫描通常会被
+内核权限拒绝，bot 会退回视觉读取。
 
 ## 技术栈
 
@@ -132,15 +137,19 @@ Bot 启动后 MCP Server 监听 `http://localhost:8000`，提供以下工具：
 
 ## 管理与调试页面
 
-Bot 在 MCP HTTP 服务上挂载只读调试页，容器内地址为
+Bot 在 MCP HTTP 服务上挂载内部 manager 页面，容器内地址为
 `http://localhost:8000/debug`。按默认 compose 映射，宿主机访问：
 
 ```bash
 http://localhost:8100/debug
 ```
 
-页面展示 bot/MCP/RPA/视觉读取/YOLO/队列/插件/数据库发现状态，以及脱敏日志尾部和
-不含聊天内容的窗口布局图。默认不会暴露原始微信截图；如需临时调试像素级问题，可在
+页面包含 Overview、Database、Messages、RPA、Window、Logs 几个工作区，可查看
+bot/MCP/RPA/数据库/视觉读取/YOLO/队列/插件状态、脱敏日志尾部和不含聊天内容的窗口布局图。
+内部页还提供 DB rescan、联系人搜索、文本历史查询、最近消息媒体解析检查、DB 轮询暂停/恢复，
+以及文本 RPA 入队。该页面没有内置鉴权，部署时应放在代理鉴权之后。
+
+默认不会暴露原始微信截图；如需临时调试像素级问题，可在
 `config/config.yaml` 中显式设置 `debug.allow_raw_screenshot: true` 后重启 bot。
 
 ## 项目结构

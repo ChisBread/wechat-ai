@@ -10,6 +10,7 @@ from wechat_ai_bot.services.core.linux_database_discovery import (
     SQLITE_HEADER,
     LinuxDatabaseDiscovery,
 )
+from wechat_ai_bot.services.core.linux_sqlcipher import verify_sqlcipher_page_hmac
 from wechat_ai_bot.services.core.message_factory_service import MessageFactoryService
 from wechat_ai_bot.services.core.visual_message_service import VisualMessageService
 
@@ -145,6 +146,10 @@ class LinuxDatabaseDiscoveryTest(unittest.TestCase):
 
     def test_sqlite_header_constant_matches_plain_sqlite(self):
         self.assertEqual(SQLITE_HEADER, b"SQLite format 3\x00")
+
+    def test_sqlcipher_hmac_verifier_rejects_short_or_wrong_key(self):
+        self.assertFalse(verify_sqlcipher_page_hmac(b"short", b"0" * 32))
+        self.assertFalse(verify_sqlcipher_page_hmac(b"\x00" * 4096, b"1" * 32))
 
 
 if __name__ == "__main__":

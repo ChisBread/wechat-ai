@@ -31,7 +31,6 @@ RUN apt-get update && \
         libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 \
         libatomic1 shared-mime-info desktop-file-utils stalonetray inotify-tools \
         curl wget xclip xdotool x11-utils x11-xserver-utils gnome-screenshot libgl1 \
-        sqlcipher libsqlcipher-dev \
         python3.12 python3.12-venv python3.12-dev python3-tk
 
 RUN python3.12 -m venv /opt/venv-bot && \

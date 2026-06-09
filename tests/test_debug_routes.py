@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from wechat_ai_bot.mcp.debug import build_layout_png, mask_value, redact_text, tail_file
+from wechat_ai_bot.mcp.debug import _debug_html, build_layout_png, mask_value, redact_text, tail_file
 from wechat_ai_bot.mcp.app import create_app
 from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.utils import size_config
@@ -77,6 +77,12 @@ class DebugRoutesTest(unittest.TestCase):
 
         self.assertIn("/debug", paths)
         self.assertIn("/debug/api/status", paths)
+        self.assertIn("/debug/api/contacts", paths)
+        self.assertIn("/debug/api/messages", paths)
+        self.assertIn("/debug/api/rpa/send_text", paths)
+
+    def test_debug_html_loads_manager_template(self):
+        self.assertIn("WeChat-AI Manager", _debug_html())
 
     def test_create_app_skips_debug_routes_when_disabled(self):
         app = create_app(

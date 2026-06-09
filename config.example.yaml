@@ -25,6 +25,17 @@ mqtt:
 dingtalk:
   webhook_url: ""
 
+# Linux WeChat database reading
+database:
+  enabled: true
+  xwechat_files_root: /config/xwechat_files
+  # Reads WeChat process memory to find SQLCipher keys, keeps keys in memory only.
+  scan_keys: true
+  active_account: ""
+  poll_interval: 0.75
+  key_retry_interval: 10.0
+  message_map_refresh_interval: 30.0
+
 # Logging
 logging:
   path: /config/logs
@@ -70,6 +81,9 @@ rpa:
 
 # Visual message reading
 visual_message:
+  # Database reading is preferred. Set enabled=true to force visual reading too.
+  enabled: false
+  fallback_when_database_unavailable: true
   poll_interval: 2.0
   max_message_age: 300
   dedup_cache_size: 100

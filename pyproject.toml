@@ -35,6 +35,7 @@ dependencies = [
     "fuzzywuzzy==0.18.0",
     "xmltodict==0.14.2",
     "zstandard==0.23.0",
+    "sqlcipher3-binary==0.6.0",
     "rapidocr==3.2.0",
     "python-Levenshtein==0.27.1",
     "watchfiles==1.1.0",
@@ -59,6 +60,7 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.package-data]
 "wechat_ai_bot.yolo.models" = ["*.pt"]
+"wechat_ai_bot.mcp" = ["*.html"]
 
 # ===================================================================
 # Core plugin entry points
