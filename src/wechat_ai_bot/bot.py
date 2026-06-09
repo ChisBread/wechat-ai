@@ -45,6 +45,7 @@ class Bot:
 
         self.is_running = False
         self.chat_window_ready = False
+        self.started_at = time.time()
         self._window_init_thread = None
         self._components: List[Any] = []
 
@@ -217,7 +218,7 @@ class Bot:
             # Start MCP server (blocking)
             self.logger.info("Starting MCP server...")
             from wechat_ai_bot.mcp.app import create_app
-            self.mcp_app = create_app(self.user_info, self.config)
+            self.mcp_app = create_app(self.user_info, self.config, bot=self)
             self.mcp_app.run("streamable-http")
 
         except Exception as e:

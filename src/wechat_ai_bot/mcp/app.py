@@ -19,6 +19,7 @@ from typing import Any, Callable, List, Literal, Optional, Tuple
 
 from mcp.server.fastmcp import Context, FastMCP
 from wechat_ai_bot.clients.mqtt_client import MQTTClient
+from wechat_ai_bot.mcp.debug import register_debug_routes
 from wechat_ai_bot.mcp.dispatchers import MqttCommandDispatcher
 from wechat_ai_bot.mcp.protocols import CommandDispatcher
 from wechat_ai_bot.models import Contact, UserInfo
@@ -105,7 +106,25 @@ def _get_app_context_from_request(ctx: Context) -> AppContext:
     return ctx.request_context.lifespan_context
 
 
-def create_app(user_info: UserInfo, config: dict) -> FastMCP:
+def _get_nested_config(config: Any, key: str, default: Any = None) -> Any:
+    if isinstance(config, dict):
+        if key in config:
+            return config.get(key, default)
+        value = config
+        for part in key.split("."):
+            if not isinstance(value, dict) or part not in value:
+                return default
+            value = value[part]
+        return value
+    if hasattr(config, "get"):
+        try:
+            return config.get(key, default)
+        except TypeError:
+            return default
+    return default
+
+
+def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
     """Create and configure the MCP application (Linux port)."""
 
     lifespan_handler = functools.partial(
@@ -127,6 +146,9 @@ def create_app(user_info: UserInfo, config: dict) -> FastMCP:
         host=mcp_config.get("host", "0.0.0.0"),
         port=mcp_port,
     )
+
+    if bot is not None and _get_nested_config(config, "debug.enabled", True):
+        register_debug_routes(mcp, bot, config)
 
     # --- Tool Functions ---
 

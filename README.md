@@ -130,6 +130,19 @@ Bot 启动后 MCP Server 监听 `http://localhost:8000`，提供以下工具：
 - `invite_room_member` - 邀请入群
 - 更多工具见 `mcp/app.py`
 
+## 管理与调试页面
+
+Bot 在 MCP HTTP 服务上挂载只读调试页，容器内地址为
+`http://localhost:8000/debug`。按默认 compose 映射，宿主机访问：
+
+```bash
+http://localhost:8100/debug
+```
+
+页面展示 bot/MCP/RPA/视觉读取/YOLO/队列/插件/数据库发现状态，以及脱敏日志尾部和
+不含聊天内容的窗口布局图。默认不会暴露原始微信截图；如需临时调试像素级问题，可在
+`config/config.yaml` 中显式设置 `debug.allow_raw_screenshot: true` 后重启 bot。
+
 ## 项目结构
 
 ```

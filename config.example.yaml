@@ -66,6 +66,13 @@ visual_message:
   max_message_age: 300
   dedup_cache_size: 100
 
+# Management/debug page (served by MCP HTTP server)
+debug:
+  enabled: true
+  allow_raw_screenshot: false
+  show_sensitive: false
+  xwechat_files_root: /config/xwechat_files
+
 # Plugins
 plugins:
   self-msg-plugin:
