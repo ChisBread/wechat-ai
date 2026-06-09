@@ -12,7 +12,7 @@ authors = [
 description = "AI Bot for WeChat Linux running in Docker with Selkies WebRTC"
 readme = "README.md"
 requires-python = ">=3.12,<4.0"
-license = "MIT"
+license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 
 classifiers = [

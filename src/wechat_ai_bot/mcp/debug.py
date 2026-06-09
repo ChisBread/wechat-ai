@@ -21,24 +21,41 @@ from wechat_ai_bot.services.core.linux_database_discovery import LinuxDatabaseDi
 
 
 def register_debug_routes(mcp: Any, bot: Any, config: Any) -> None:
-    """Register manager/debug routes on a FastMCP instance."""
+    """Register manager routes on a FastMCP instance."""
     from starlette.requests import Request
-    from starlette.responses import JSONResponse, PlainTextResponse, Response
+    from starlette.responses import RedirectResponse, Response
 
+    @mcp.custom_route("/dashboard", methods=["GET"], include_in_schema=False)
+    async def dashboard_page(request: Request) -> Response:
+        return Response(_dashboard_html(), media_type="text/html; charset=utf-8")
+
+    @mcp.custom_route("/dashboard/", methods=["GET"], include_in_schema=False)
+    async def dashboard_page_slash(request: Request) -> Response:
+        return Response(_dashboard_html(), media_type="text/html; charset=utf-8")
+
+    # Backward compatibility for older local links.
     @mcp.custom_route("/debug", methods=["GET"], include_in_schema=False)
     async def debug_page(request: Request) -> Response:
-        return Response(_debug_html(), media_type="text/html; charset=utf-8")
+        return RedirectResponse(url="/dashboard", status_code=307)
 
     @mcp.custom_route("/debug/", methods=["GET"], include_in_schema=False)
     async def debug_page_slash(request: Request) -> Response:
-        return Response(_debug_html(), media_type="text/html; charset=utf-8")
+        return RedirectResponse(url="/dashboard", status_code=307)
 
-    @mcp.custom_route("/debug/api/status", methods=["GET"], include_in_schema=False)
+    for prefix in ("/dashboard", "/debug"):
+        _register_dashboard_api_routes(mcp, bot, config, prefix)
+
+
+def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str) -> None:
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse, PlainTextResponse, Response
+
+    @mcp.custom_route(f"{prefix}/api/status", methods=["GET"], include_in_schema=False)
     async def debug_status(request: Request) -> JSONResponse:
         show_sensitive = bool(_config_get(config, "debug.show_sensitive", False))
         return JSONResponse(build_debug_status(bot, config, show_sensitive=show_sensitive))
 
-    @mcp.custom_route("/debug/api/database/rescan", methods=["POST"], include_in_schema=False)
+    @mcp.custom_route(f"{prefix}/api/database/rescan", methods=["POST"], include_in_schema=False)
     async def debug_database_rescan(request: Request) -> JSONResponse:
         database_service = getattr(bot, "database_service", None)
         if not database_service or not hasattr(database_service, "refresh"):
@@ -52,7 +69,7 @@ def register_debug_routes(mcp: Any, bot: Any, config: Any) -> None:
                 status_code=500,
             )
 
-    @mcp.custom_route("/debug/api/message/pause", methods=["POST"], include_in_schema=False)
+    @mcp.custom_route(f"{prefix}/api/message/pause", methods=["POST"], include_in_schema=False)
     async def debug_message_pause(request: Request) -> JSONResponse:
         message_service = getattr(bot, "message_service", None)
         if not message_service or not hasattr(message_service, "pause"):
@@ -60,7 +77,7 @@ def register_debug_routes(mcp: Any, bot: Any, config: Any) -> None:
         message_service.pause()
         return JSONResponse({"ok": True, "message": _call_status(message_service)})
 
-    @mcp.custom_route("/debug/api/message/resume", methods=["POST"], include_in_schema=False)
+    @mcp.custom_route(f"{prefix}/api/message/resume", methods=["POST"], include_in_schema=False)
     async def debug_message_resume(request: Request) -> JSONResponse:
         message_service = getattr(bot, "message_service", None)
         if not message_service or not hasattr(message_service, "resume"):
@@ -68,7 +85,7 @@ def register_debug_routes(mcp: Any, bot: Any, config: Any) -> None:
         message_service.resume()
         return JSONResponse({"ok": True, "message": _call_status(message_service)})
 
-    @mcp.custom_route("/debug/api/contacts", methods=["GET"], include_in_schema=False)
+    @mcp.custom_route(f"{prefix}/api/contacts", methods=["GET"], include_in_schema=False)
     async def debug_contacts(request: Request) -> JSONResponse:
         database_service = getattr(bot, "database_service", None)
         if not database_service or not getattr(database_service, "is_available", False):
@@ -89,7 +106,7 @@ def register_debug_routes(mcp: Any, bot: Any, config: Any) -> None:
             }
         )
 
-    @mcp.custom_route("/debug/api/messages", methods=["GET"], include_in_schema=False)
+    @mcp.custom_route(f"{prefix}/api/messages", methods=["GET"], include_in_schema=False)
     async def debug_messages(request: Request) -> JSONResponse:
         database_service = getattr(bot, "database_service", None)
         if not database_service or not getattr(database_service, "is_available", False):
@@ -128,7 +145,7 @@ def register_debug_routes(mcp: Any, bot: Any, config: Any) -> None:
             }
         )
 
-    @mcp.custom_route("/debug/api/messages/media", methods=["GET"], include_in_schema=False)
+    @mcp.custom_route(f"{prefix}/api/messages/media", methods=["GET"], include_in_schema=False)
     async def debug_media_messages(request: Request) -> JSONResponse:
         database_service = getattr(bot, "database_service", None)
         if not database_service or not getattr(database_service, "is_available", False):
@@ -164,7 +181,7 @@ def register_debug_routes(mcp: Any, bot: Any, config: Any) -> None:
             }
         )
 
-    @mcp.custom_route("/debug/api/rpa/send_text", methods=["POST"], include_in_schema=False)
+    @mcp.custom_route(f"{prefix}/api/rpa/send_text", methods=["POST"], include_in_schema=False)
     async def debug_rpa_send_text(request: Request) -> JSONResponse:
         try:
             payload = await request.json()
@@ -208,7 +225,7 @@ def register_debug_routes(mcp: Any, bot: Any, config: Any) -> None:
             }
         )
 
-    @mcp.custom_route("/debug/api/logs", methods=["GET"], include_in_schema=False)
+    @mcp.custom_route(f"{prefix}/api/logs", methods=["GET"], include_in_schema=False)
     async def debug_logs(request: Request) -> JSONResponse:
         try:
             lines = int(request.query_params.get("lines", "160"))
@@ -225,12 +242,12 @@ def register_debug_routes(mcp: Any, bot: Any, config: Any) -> None:
             }
         )
 
-    @mcp.custom_route("/debug/layout.png", methods=["GET"], include_in_schema=False)
+    @mcp.custom_route(f"{prefix}/layout.png", methods=["GET"], include_in_schema=False)
     async def debug_layout(request: Request) -> Response:
         png = build_layout_png(bot)
         return Response(png, media_type="image/png")
 
-    @mcp.custom_route("/debug/raw-screenshot.png", methods=["GET"], include_in_schema=False)
+    @mcp.custom_route(f"{prefix}/raw-screenshot.png", methods=["GET"], include_in_schema=False)
     async def debug_raw_screenshot(request: Request) -> Response:
         if not bool(_config_get(config, "debug.allow_raw_screenshot", False)):
             return PlainTextResponse("raw screenshot is disabled", status_code=403)
@@ -783,8 +800,8 @@ def mask_value(value: str, *, keep_start: int = 2, keep_end: int = 2) -> str:
     return f"{value[:keep_start]}***{value[-keep_end:]}"
 
 
-def _debug_html() -> str:
-    html_path = Path(__file__).with_name("debug.html")
+def _dashboard_html() -> str:
+    html_path = Path(__file__).with_name("dashboard.html")
     try:
         return html_path.read_text(encoding="utf-8")
     except OSError:
@@ -796,242 +813,12 @@ DEBUG_HTML = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WeChat-AI Debug</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --bg: #f5f7fa;
-      --panel: #ffffff;
-      --line: #d8e0e8;
-      --text: #17212b;
-      --muted: #647384;
-      --ok: #0f7b5f;
-      --warn: #a16207;
-      --bad: #b42318;
-      --blue: #1d4ed8;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--text);
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      font-size: 14px;
-      letter-spacing: 0;
-    }
-    header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      padding: 14px 20px;
-      background: #17212b;
-      color: #fff;
-      border-bottom: 1px solid #0f1720;
-    }
-    h1 { margin: 0; font-size: 18px; font-weight: 700; }
-    main { width: min(1400px, 100%); margin: 0 auto; padding: 16px; }
-    .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-    button {
-      border: 1px solid #94a3b8;
-      background: #fff;
-      color: #17212b;
-      border-radius: 6px;
-      min-height: 34px;
-      padding: 0 12px;
-      cursor: pointer;
-      font: inherit;
-    }
-    button:hover { border-color: var(--blue); color: var(--blue); }
-    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 12px; }
-    section {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      min-width: 0;
-    }
-    section h2 {
-      margin: 0;
-      padding: 10px 12px;
-      font-size: 14px;
-      border-bottom: 1px solid var(--line);
-      background: #f9fbfd;
-    }
-    .span-3 { grid-column: span 3; }
-    .span-4 { grid-column: span 4; }
-    .span-5 { grid-column: span 5; }
-    .span-7 { grid-column: span 7; }
-    .span-12 { grid-column: span 12; }
-    .body { padding: 12px; }
-    .kv { width: 100%; border-collapse: collapse; table-layout: fixed; }
-    .kv th, .kv td {
-      padding: 7px 8px;
-      border-bottom: 1px solid #eef2f6;
-      vertical-align: top;
-      word-break: break-word;
-    }
-    .kv th { width: 42%; color: var(--muted); text-align: left; font-weight: 600; }
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      min-height: 24px;
-      padding: 0 8px;
-      border-radius: 999px;
-      font-size: 12px;
-      font-weight: 700;
-      border: 1px solid var(--line);
-      background: #f8fafc;
-    }
-    .ok { color: var(--ok); border-color: #9bd5c7; background: #eefaf6; }
-    .warn { color: var(--warn); border-color: #e9c46a; background: #fff8e1; }
-    .bad { color: var(--bad); border-color: #f0a7a0; background: #fff1f0; }
-    .muted { color: var(--muted); }
-    .mono {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-      font-size: 12px;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-    }
-    .layout-img {
-      width: 100%;
-      max-height: 560px;
-      object-fit: contain;
-      background: #f8fafc;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-    }
-    .log {
-      margin: 0;
-      max-height: 420px;
-      overflow: auto;
-      padding: 12px;
-      background: #111827;
-      color: #e5e7eb;
-      border-radius: 6px;
-      line-height: 1.45;
-    }
-    .list { display: flex; flex-direction: column; gap: 8px; }
-    .rowline { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid #eef2f6; padding-bottom: 7px; }
-    .rowline:last-child { border-bottom: 0; padding-bottom: 0; }
-    @media (max-width: 920px) {
-      main { padding: 10px; }
-      header { align-items: flex-start; flex-direction: column; }
-      .span-3, .span-4, .span-5, .span-7, .span-12 { grid-column: span 12; }
-    }
-  </style>
+  <title>WeChat-AI Dashboard</title>
 </head>
 <body>
-  <header>
-    <h1>WeChat-AI Debug</h1>
-    <div class="toolbar">
-      <span id="stamp" class="muted">loading</span>
-      <button id="refresh">Refresh</button>
-      <button id="rescanDb">Rescan DB</button>
-      <button id="logs">Logs</button>
-    </div>
-  </header>
-  <main class="grid">
-    <section class="span-3"><h2>Runtime</h2><div id="runtime" class="body"></div></section>
-    <section class="span-3"><h2>Bot</h2><div id="bot" class="body"></div></section>
-    <section class="span-3"><h2>Queues</h2><div id="queues" class="body"></div></section>
-    <section class="span-3"><h2>Vision</h2><div id="vision" class="body"></div></section>
-    <section class="span-7"><h2>Window Layout</h2><div class="body"><img id="layout" class="layout-img" src="/debug/layout.png" alt="layout"></div></section>
-    <section class="span-5"><h2>Database</h2><div id="database" class="body"></div></section>
-    <section class="span-4"><h2>Services</h2><div id="services" class="body"></div></section>
-    <section class="span-4"><h2>Processes</h2><div id="processes" class="body"></div></section>
-    <section class="span-4"><h2>Plugins</h2><div id="plugins" class="body"></div></section>
-    <section class="span-12"><h2>Logs</h2><div class="body"><pre id="logText" class="log mono"></pre></div></section>
-  </main>
-  <script>
-    const $ = (id) => document.getElementById(id);
-    const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    const pill = (ok, text) => `<span class="pill ${ok ? 'ok' : 'bad'}">${esc(text)}</span>`;
-    const warn = (text) => `<span class="pill warn">${esc(text)}</span>`;
-    function table(rows) {
-      return `<table class="kv"><tbody>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${v}</td></tr>`).join("")}</tbody></table>`;
-    }
-    function bool(v) { return pill(Boolean(v), v ? "yes" : "no"); }
-    function json(v) { return `<span class="mono">${esc(JSON.stringify(v, null, 2))}</span>`; }
-    async function loadStatus() {
-      const res = await fetch('/debug/api/status', { cache: 'no-store' });
-      const data = await res.json();
-      $('stamp').textContent = new Date(data.generated_at * 1000).toLocaleString();
-      $('runtime').innerHTML = table([
-        ['pid', esc(data.runtime.pid)],
-        ['uptime', esc(`${data.runtime.uptime_seconds}s`)],
-        ['python', esc(data.runtime.python)],
-        ['platform', esc(data.runtime.platform)]
-      ]);
-      $('bot').innerHTML = table([
-        ['running', bool(data.bot.running)],
-        ['chat ready', bool(data.bot.chat_window_ready)],
-        ['account', esc(data.bot.user.account || '')],
-        ['nickname', esc(data.bot.user.nickname || '')],
-        ['version', esc(data.bot.user.version || '')]
-      ]);
-      $('queues').innerHTML = table([
-        ['message', esc(data.queues.message_queue.size)],
-        ['rpa', esc(data.queues.rpa_task_queue.size)],
-        ['status', esc(data.queues.status_queue.size)]
-      ]);
-      $('vision').innerHTML = table([
-        ['yolo', bool(data.yolo.model_loaded)],
-        ['imgsz config', esc(data.yolo.imgsz_config || '')],
-        ['imgsz actual', esc(JSON.stringify(data.yolo.imgsz_actual || ''))],
-        ['stride', esc(data.yolo.stride || '')],
-        ['visual running', bool(data.services.visual.running)],
-        ['primed', bool(data.services.visual.primed)],
-        ['session', esc(data.services.visual.current_session || '')],
-        ['seen hashes', esc(data.services.visual.seen_visual_hashes || 0)]
-      ]);
-      $('database').innerHTML = table([
-        ['available', bool(data.database.available || data.database.can_attempt_business_database_open)],
-        ['driver', esc(data.database.driver || data.database.sqlcipher_driver || '')],
-        ['primary', esc(data.database.primary_account || '')],
-        ['accounts', esc(data.database.account_count || 0)],
-        ['keys', esc(data.database.key_count ?? data.database.key_scan?.found_key_count ?? '')],
-        ['message tables', esc(data.database.message_tables ?? '')],
-        ['contacts', esc(data.database.contacts ?? '')],
-        ['rooms', esc(data.database.rooms ?? '')],
-        ['last error', esc(data.database.last_error || data.database.error || '')]
-      ]) + `<div class="list">${((data.database.discovery || data.database).accounts || []).map(a => `<div class="rowline"><span>${esc(a.account)}</span><span class="mono">${esc(a.encrypted_databases)} enc / ${esc(a.plaintext_databases)} plain</span></div>`).join("")}</div>`;
-      $('services').innerHTML = table([
-        ['db message', bool(data.services.message.is_running)],
-        ['db message queue', esc(data.services.message.queue_size ?? '')],
-        ['processor', bool(data.services.processor.is_running)],
-        ['processor queue', esc(data.services.processor.queue_size ?? '')],
-        ['rpa', bool(data.services.rpa.is_running)],
-        ['rpa queue', esc(data.services.rpa.queue_size ?? '')],
-        ['mqtt', data.services.mqtt.enabled ? bool(data.services.mqtt.connected) : warn('disabled')]
-      ]);
-      $('processes').innerHTML = table([
-        ['wechat', bool(data.processes.wechat.running)],
-        ['wechat pids', esc((data.processes.wechat.pids || []).join(', '))],
-        ['bot', bool(data.processes.bot.running)],
-        ['display', data.processes.display.ok ? pill(true, data.processes.display.stdout) : warn(data.processes.display.stderr || 'unknown')]
-      ]);
-      $('plugins').innerHTML = `<div class="list">${(data.plugins || []).map(p => `<div class="rowline"><span>${esc(p.name)}</span><span class="mono">${esc(p.priority)} ${esc(p.class)}</span></div>`).join("") || '<span class="muted">none</span>'}</div>`;
-      $('layout').src = `/debug/layout.png?t=${Date.now()}`;
-    }
-    async function loadLogs() {
-      const res = await fetch('/debug/api/logs?lines=180', { cache: 'no-store' });
-      const data = await res.json();
-      $('logText').textContent = data.text || '';
-    }
-    async function rescanDb() {
-      $('stamp').textContent = 'rescanning database...';
-      const res = await fetch('/debug/api/database/rescan', { method: 'POST', cache: 'no-store' });
-      const data = await res.json();
-      if (!data.ok) throw new Error(data.error || 'database rescan failed');
-      await loadStatus();
-    }
-    $('refresh').addEventListener('click', loadStatus);
-    $('rescanDb').addEventListener('click', () => rescanDb().catch(err => { $('stamp').textContent = err.message; }));
-    $('logs').addEventListener('click', loadLogs);
-    loadStatus().catch(err => { $('stamp').textContent = err.message; });
-    loadLogs().catch(() => {});
-    setInterval(loadStatus, 5000);
-  </script>
+  <h1>WeChat-AI Dashboard</h1>
+  <p>dashboard.html is missing from the package.</p>
+  <p><a href="/dashboard/api/status">Runtime status JSON</a></p>
 </body>
 </html>
 """

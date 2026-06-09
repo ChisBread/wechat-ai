@@ -417,7 +417,7 @@
       <div id="window" class="tab">
         <div class="grid">
           <section class="span-5"><h2>Window</h2><div id="windowState" class="body"></div></section>
-          <section class="span-7"><h2>Layout</h2><div class="body"><img id="layout" class="layout-img" src="/debug/layout.png" alt="layout"></div></section>
+          <section class="span-7"><h2>Layout</h2><div class="body"><img id="layout" class="layout-img" src="/dashboard/layout.png" alt="layout"></div></section>
           <section class="span-12"><h2>YOLO</h2><div id="vision" class="body"></div></section>
         </div>
       </div>
@@ -443,6 +443,8 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
+    const BASE_PATH = window.location.pathname.startsWith('/dashboard') ? '/dashboard' : '/debug';
+    const apiPath = (path) => `${BASE_PATH}${path}`;
     const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const short = (v, n = 160) => {
       const text = String(v ?? "");
@@ -530,7 +532,7 @@
         ['window ready', bool(data.bot.chat_window_ready)],
         ['current session', esc(data.window.current_session || '')]
       ]);
-      $('layout').src = `/debug/layout.png?t=${Date.now()}`;
+      $('layout').src = `${apiPath('/layout.png')}?t=${Date.now()}`;
     }
 
     function serviceBadge(service) {
@@ -599,30 +601,30 @@
     }
 
     async function loadStatus() {
-      const data = await fetchJson('/debug/api/status');
+      const data = await fetchJson(apiPath('/api/status'));
       renderStatus(data);
     }
 
     async function loadLogs() {
       const lines = $('logLines').value || '240';
-      const data = await fetchJson(`/debug/api/logs?lines=${encodeURIComponent(lines)}`);
+      const data = await fetchJson(`${apiPath('/api/logs')}?lines=${encodeURIComponent(lines)}`);
       $('logPath').textContent = data.path || '';
       $('logText').textContent = data.text || '';
     }
 
     async function rescanDb() {
       $('stamp').textContent = 'rescanning database...';
-      await fetchJson('/debug/api/database/rescan', { method: 'POST' });
+      await fetchJson(apiPath('/api/database/rescan'), { method: 'POST' });
       await loadStatus();
     }
 
     async function pauseMessages() {
-      await fetchJson('/debug/api/message/pause', { method: 'POST' });
+      await fetchJson(apiPath('/api/message/pause'), { method: 'POST' });
       await loadStatus();
     }
 
     async function resumeMessages() {
-      await fetchJson('/debug/api/message/resume', { method: 'POST' });
+      await fetchJson(apiPath('/api/message/resume'), { method: 'POST' });
       await loadStatus();
     }
 
@@ -634,7 +636,7 @@
         return;
       }
       $('contactStatus').textContent = 'searching...';
-      const data = await fetchJson(`/debug/api/contacts?q=${encodeURIComponent(q)}&limit=50`);
+      const data = await fetchJson(`${apiPath('/api/contacts')}?q=${encodeURIComponent(q)}&limit=50`);
       $('contactStatus').textContent = `${data.count} result(s)`;
       $('contactResults').innerHTML = data.contacts.map(contactItem).join("") || '<span class="muted">no matches</span>';
     }
@@ -674,7 +676,7 @@
       const params = new URLSearchParams({ contact, limit });
       if (!media && keyword) params.set('query', keyword);
       $('messageStatus').textContent = media ? 'checking media...' : 'querying...';
-      const endpoint = media ? '/debug/api/messages/media' : '/debug/api/messages';
+      const endpoint = apiPath(media ? '/api/messages/media' : '/api/messages');
       const data = await fetchJson(`${endpoint}?${params.toString()}`);
       $('messageStatus').textContent = `${data.count} result(s) from ${data.contact.display_name}`;
       $('messageResults').innerHTML = data.messages.map(media ? mediaMessageItem : textMessageItem).join("") || '<span class="muted">no messages</span>';
@@ -715,7 +717,7 @@
       const atUserName = $('rpaAt').value.trim();
       const content = $('rpaContent').value;
       $('rpaStatus').textContent = 'queueing...';
-      const data = await fetchJson('/debug/api/rpa/send_text', {
+      const data = await fetchJson(apiPath('/api/rpa/send_text'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target, content, at_user_name: atUserName })

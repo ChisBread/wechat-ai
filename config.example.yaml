@@ -92,7 +92,7 @@ visual_message:
   yolo_imgsz: auto
   yolo_stride: 32
 
-# Management/debug page (served by MCP HTTP server)
+# Internal dashboard and compatibility debug routes (served by MCP HTTP server)
 debug:
   enabled: true
   allow_raw_screenshot: false

@@ -138,16 +138,17 @@ Bot 启动后 MCP Server 监听 `http://localhost:8000`，提供以下工具：
 ## 管理与调试页面
 
 Bot 在 MCP HTTP 服务上挂载内部 manager 页面，容器内地址为
-`http://localhost:8000/debug`。按默认 compose 映射，宿主机访问：
+`http://localhost:8000/dashboard`。按默认 compose 映射，宿主机访问：
 
 ```bash
-http://localhost:8100/debug
+http://localhost:8100/dashboard
 ```
 
 页面包含 Overview、Database、Messages、RPA、Window、Logs 几个工作区，可查看
 bot/MCP/RPA/数据库/视觉读取/YOLO/队列/插件状态、脱敏日志尾部和不含聊天内容的窗口布局图。
 内部页还提供 DB rescan、联系人搜索、文本历史查询、最近消息媒体解析检查、DB 轮询暂停/恢复，
 以及文本 RPA 入队。该页面没有内置鉴权，部署时应放在代理鉴权之后。
+旧入口 `/debug` 保留为兼容跳转，旧的 `/debug/api/...` API 也继续可用。
 
 默认不会暴露原始微信截图；如需临时调试像素级问题，可在
 `config/config.yaml` 中显式设置 `debug.allow_raw_screenshot: true` 后重启 bot。
@@ -197,6 +198,10 @@ docker compose build --no-cache
 docker compose up -d
 ```
 
-## 许可证
+## 许可证与致谢
 
-MIT License
+本项目基于 **GPL-3.0-or-later** 许可证开源。项目集成和移植了
+`omni-bot-sdk-oss` 的 bot/RPA/插件/消息解析思路及部分代码，因此遵循其 GPL-3.0-or-later
+授权要求。容器桌面与 Selkies/微信封装方案参考 `wechat-selkies`，该项目采用 MIT License。
+
+详见 [LICENSE](LICENSE) 和 [CREDITS.md](CREDITS.md)。
