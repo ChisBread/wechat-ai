@@ -279,6 +279,59 @@ class DebugRoutesTest(unittest.TestCase):
         self.assertEqual(searched["status"], "ok")
         self.assertEqual(searched["messages"][0]["text"], "hello")
 
+    def test_ported_write_tools_return_dry_run_payloads(self):
+        app = create_app(
+            UserInfo(account="me"),
+            DummyConfig({"debug": {"enabled": False}, "mcp": {"port": 8000}}),
+            bot=DummyMcpBot(),
+        )
+        tools = app._tool_manager._tools
+
+        with TemporaryDirectory() as tmp:
+            file_path = Path(tmp) / "report.txt"
+            file_path.write_text("hello", encoding="utf-8")
+            cases = [
+                (
+                    "send_file_msg",
+                    (None, "Alice", str(file_path), True),
+                    "send_file",
+                ),
+                (
+                    "send_pat_msg",
+                    (None, "Alice", None, True),
+                    "pat",
+                ),
+                (
+                    "remove_room_member",
+                    (None, "Room", "Alice", True),
+                    "remove_room_member",
+                ),
+                (
+                    "invite_room_member",
+                    (None, "Room", "Alice", True),
+                    "invice_2_room",
+                ),
+                (
+                    "rename_room_name",
+                    (None, "Room", "New Room", True),
+                    "rename_room_name",
+                ),
+                (
+                    "rename_name_in_room",
+                    (None, "Room", "Me", True),
+                    "rename_name_in_room",
+                ),
+            ]
+
+            for tool_name, args, action_type in cases:
+                with self.subTest(tool_name=tool_name):
+                    payload = json.loads(tools[tool_name].fn(*args))
+
+                    self.assertEqual(payload["status"], "dry_run")
+                    self.assertEqual(payload["tool"], tool_name)
+                    self.assertEqual(payload["action_type"], action_type)
+                    self.assertNotEqual(payload["status"], "unavailable")
+
     def test_suggest_size_aligns_configured_window_to_factor(self):
         original_size = size_config.pyautogui.size
         size_config.pyautogui.size = lambda: type("Screen", (), {"width": 3840, "height": 1916})()

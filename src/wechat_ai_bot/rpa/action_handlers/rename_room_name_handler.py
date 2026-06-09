@@ -1,0 +1,59 @@
+import time
+from dataclasses import dataclass, field
+
+from wechat_ai_bot.rpa.action_handlers.base_handler import (
+    BaseActionHandler,
+    RPAAction,
+    RPAActionType,
+)
+from wechat_ai_bot.rpa.action_handlers.mixins.group_operations_mixin import (
+    GroupOperationsMixin,
+)
+from wechat_ai_bot.rpa.action_handlers.mixins.window_operations_mixin import (
+    WindowOperationsMixin,
+)
+from wechat_ai_bot.rpa.linux_window_manager import WindowTypeEnum
+
+
+@dataclass
+class RenameRoomNameAction(RPAAction):
+    target: str = field(default="")
+    name: str = field(default="")
+
+    def __post_init__(self):
+        self.action_type = RPAActionType.RENAME_ROOM_NAME
+        self.is_send_message = False
+
+
+class RenameRoomNameHandler(WindowOperationsMixin, GroupOperationsMixin, BaseActionHandler):
+    """Rename a group chat through the group settings sidebar."""
+
+    def execute(self, action: RenameRoomNameAction) -> bool:
+        try:
+            if not action.target or not action.name:
+                self.logger.error("RenameRoomNameAction target/name is empty")
+                return False
+            if not self.window_manager.switch_session(action.target):
+                return False
+            if not self.window_manager.open_close_sidebar():
+                return False
+            for _ in range(4):
+                if self._click_sidebar_text("群聊名称", fuzzy=85):
+                    break
+                self._scroll_room_sidebar(-5)
+            else:
+                self.logger.error("未找到群聊名称入口")
+                return False
+            if not self._replace_input_text(action.name):
+                return False
+            confirm = self.window_manager.wait_for_window(
+                WindowTypeEnum.RoomInputConfirmBox,
+                timeout=5,
+            )
+            if confirm:
+                return self._click_confirm_button(self.get_window_region(confirm))
+            # Some Linux WeChat builds commit immediately after Enter.
+            time.sleep(self.controller.window_manager.action_delay)
+            return True
+        finally:
+            self._cleanup()

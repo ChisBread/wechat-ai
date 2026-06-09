@@ -7,9 +7,12 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+import wechat_ai_bot.utils.mouse as pyautogui
+from wechat_ai_bot.rpa.linux_window_manager import WindowTypeEnum
 from wechat_ai_bot.rpa.image_processor import ImageProcessor
 from wechat_ai_bot.rpa.ocr_processor import OCRProcessor
 from wechat_ai_bot.utils.helpers import get_center_point, set_clipboard_text
+from wechat_ai_bot.utils.mouse import human_like_mouse_move
 from wechat_ai_bot.utils.size_config import suggest_size
 
 
@@ -30,6 +33,21 @@ def _position() -> tuple:
     return (x, y)
 
 
+class XdotoolWindow:
+    """Small pyautogui-like wrapper around an X11 window id."""
+
+    def __init__(self, wid: str, title: str, geom: dict):
+        self.id = str(wid)
+        self.title = title
+        self.left = int(geom.get("x", 0))
+        self.top = int(geom.get("y", 0))
+        self.width = int(geom.get("width", 0))
+        self.height = int(geom.get("height", 0))
+
+    def close(self) -> None:
+        _run("xdotool", "windowclose", self.id)
+
+
 class XFCEWindowManager:
     """X11 window manager using xdotool + mss."""
 
@@ -44,6 +62,7 @@ class XFCEWindowManager:
         self.current_window = None
         self.MSG_TOP_X = self.MSG_TOP_Y = self.MSG_WIDTH = self.MSG_HEIGHT = 0
         self.SIDE_BAR_WIDTH = self.SESSION_LIST_WIDTH = self.TITLE_BAR_HEIGHT = 0
+        self.ROOM_SIDE_BAR_WIDTH = int(self.rpa_config.get("room_side_bar_width", 360))
         self.target_window_size = (self.size_config.width, self.size_config.height)
         self.actual_window_geometry = {}
         self.window_aligned = False
@@ -61,9 +80,13 @@ class XFCEWindowManager:
         self.last_switch_session_time = None
         self.current_session_name = ""
         self.action_delay = self.rpa_config.get("action_delay", 0.3)
+        self.side_bar_delay = self.rpa_config.get("side_bar_delay", 3)
         self.scroll_delay = self.rpa_config.get("scroll_delay", 1)
         self.switch_contact_delay = self.rpa_config.get("switch_contact_delay", 0.3)
         self.window_show_delay = self.rpa_config.get("window_show_delay", 1.5)
+        self.window_margin = self.rpa_config.get("window_margin", 20)
+        self.room_action_offset = tuple(self.rpa_config.get("room_action_offset", (0, -30)))
+        self.search_contact_offset = tuple(self.rpa_config.get("search_contact_offset", (0, 40)))
 
     def _is_main_wechat_window(self, geom: dict) -> bool:
         return (
@@ -136,6 +159,75 @@ class XFCEWindowManager:
                 managed,
             )
         return wid
+
+    def _all_managed_windows(self) -> list[XdotoolWindow]:
+        windows: list[XdotoolWindow] = []
+        for wid in self._managed_window_ids():
+            geom = self._window_geometry(wid)
+            if not geom:
+                continue
+            name = _run("xdotool", "getwindowname", wid).stdout.strip()
+            if not name:
+                continue
+            windows.append(XdotoolWindow(wid, name, geom))
+        return windows
+
+    def get_window(
+        self,
+        window_type: WindowTypeEnum,
+        all_windows: bool = False,
+    ) -> Optional[XdotoolWindow]:
+        windows = self._all_managed_windows()
+        if window_type == WindowTypeEnum.MainWindow:
+            return next((w for w in windows if w.title in {"WeChat", "Weixin", "微信"}), None)
+        if window_type == WindowTypeEnum.PublicAnnouncementWindow:
+            return next((w for w in windows if "群公告" in w.title), None)
+        if window_type == WindowTypeEnum.InviteMemberWindow:
+            return next((w for w in windows if "添加群成员" in w.title or "邀请" in w.title), None)
+        if window_type == WindowTypeEnum.RemoveMemberWindow:
+            return next((w for w in windows if "移出群成员" in w.title or "删除成员" in w.title), None)
+        if window_type == WindowTypeEnum.MenuWindow:
+            return next(
+                (
+                    w
+                    for w in windows
+                    if w.title in {"Weixin", "微信"}
+                    and w.width < max(600, self.size_config.width)
+                    and w.height < max(700, self.size_config.height)
+                ),
+                None,
+            )
+        if window_type in (
+            WindowTypeEnum.InviteConfirmWindow,
+            WindowTypeEnum.InviteResonWindow,
+            WindowTypeEnum.RoomInputConfirmBox,
+        ):
+            return next(
+                (
+                    w
+                    for w in windows
+                    if w.title in {"Weixin", "微信", "WeChat"}
+                    and w.width < self.size_config.width
+                    and w.height < self.size_config.height
+                ),
+                None,
+            )
+        return None
+
+    def wait_for_window(
+        self,
+        window_type: WindowTypeEnum,
+        all: bool = False,
+        timeout: int = 5,
+    ) -> Optional[XdotoolWindow]:
+        start = time.time()
+        while time.time() - start < timeout:
+            window = self.get_window(window_type, all)
+            if window:
+                return window
+            time.sleep(0.2)
+        self.logger.warning("Window %s not found within %ss", window_type.value, timeout)
+        return None
 
     def _find_green_button_center(self, geom: dict) -> Optional[tuple[int, int]]:
         screenshot = self.image_processor.take_screenshot(
@@ -666,6 +758,8 @@ class XFCEWindowManager:
 
         self.MSG_WIDTH = w - self.MSG_TOP_X
         self.MSG_HEIGHT = input_top - self.MSG_TOP_Y
+        configured_room_sidebar_width = int(self.rpa_config.get("room_side_bar_width", 360))
+        self.ROOM_SIDE_BAR_WIDTH = max(260, min(configured_room_sidebar_width, w // 2))
         if self.MSG_WIDTH < 300 or self.MSG_HEIGHT < 300:
             self.logger.error(
                 "Invalid WeChat layout: msg region %sx%s at %s,%s",
@@ -738,10 +832,51 @@ class XFCEWindowManager:
             self.logger.warning(f"Failed to save layout debug image: {e}")
 
     def close_all_windows(self):
+        for window in self._all_managed_windows():
+            if window.id == self.window_id:
+                continue
+            is_wechat_popup = (
+                window.title in {"WeChat", "Weixin", "微信"}
+                and window.width < self.MIN_MAIN_WINDOW_WIDTH
+                and window.height < self.MIN_MAIN_WINDOW_HEIGHT
+            )
+            is_named_dialog = any(
+                text in window.title
+                for text in ("群公告", "添加群成员", "邀请", "移出群成员", "删除成员")
+            )
+            if not is_wechat_popup and not is_named_dialog:
+                continue
+            try:
+                window.close()
+                time.sleep(0.1)
+            except Exception:
+                continue
         return True
 
     def open_close_sidebar(self, close: bool = False):
-        return True
+        try:
+            w = int(self.size_config.width)
+            h = int(self.size_config.height)
+            sidebar_w = int(self.ROOM_SIDE_BAR_WIDTH or self.rpa_config.get("room_side_bar_width", 360))
+            sidebar_w = max(260, min(sidebar_w, w // 2))
+            sample_x = max(0, w - 20)
+            sample_y = min(h - 20, max(self.TITLE_BAR_HEIGHT + 120, h // 2))
+            color = self.image_processor.get_pixel_color(sample_x, sample_y)
+            # The opened settings sidebar is mostly white on current Linux WeChat.
+            opened = bool(color and all(channel >= 238 for channel in color[:3]))
+            if close and not opened:
+                return True
+            if not close and opened:
+                return True
+            x = min(w - 36, max(self.MSG_TOP_X + self.MSG_WIDTH - 46, w - 58))
+            y = max(28, self.TITLE_BAR_HEIGHT // 2)
+            human_like_mouse_move(x, y)
+            pyautogui.click()
+            time.sleep(self.side_bar_delay)
+            return True
+        except Exception as exc:
+            self.logger.warning("Failed to toggle room sidebar: %s", exc)
+            return False
 
     def get_message_region(self) -> Optional[list]:
         if self.current_window:

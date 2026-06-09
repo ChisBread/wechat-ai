@@ -90,22 +90,33 @@ class RPAController:
             DownloadImageHandler,
             DownloadVideoHandler,
             ForwardMessageHandler,
+            Invite2RoomHandler,
             LeaveRoomHandler,
+            PatHandler,
             PublicRoomAnnouncementHandler,
+            RemoveRoomMemberHandler,
+            RenameNameInRoomHandler,
+            RenameRoomNameHandler,
+            SendFileHandler,
             SendTextMessageHandler,
         )
 
         handler_classes = [
             (RPAActionType.SEND_TEXT_MESSAGE, SendTextMessageHandler),
+            (RPAActionType.SEND_FILE, SendFileHandler),
+            (RPAActionType.PAT, PatHandler),
             (RPAActionType.PUBLIC_ROOM_ANNOUNCEMENT, PublicRoomAnnouncementHandler),
             (RPAActionType.DOWNLOAD_IMAGE, DownloadImageHandler),
             (RPAActionType.DOWNLOAD_FILE, DownloadFileHandler),
             (RPAActionType.DOWNLOAD_VIDEO, DownloadVideoHandler),
             (RPAActionType.FORWARD_MESSAGE, ForwardMessageHandler),
             (RPAActionType.LEAVE_ROOM, LeaveRoomHandler),
+            (RPAActionType.INVITE_2_ROOM, Invite2RoomHandler),
+            (RPAActionType.REMOVE_ROOM_MEMBER, RemoveRoomMemberHandler),
+            (RPAActionType.RENAME_ROOM_NAME, RenameRoomNameHandler),
+            (RPAActionType.RENAME_NAME_IN_ROOM, RenameNameInRoomHandler),
         ]
 
-        # Additional handlers will be added as they are ported
         for action_type, handler_class in handler_classes:
             try:
                 self.action_handlers[action_type] = handler_class(self)

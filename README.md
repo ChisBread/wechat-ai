@@ -13,7 +13,7 @@ WeChat-AI 主要解决一个问题：把登录好的 Linux 微信放进一个可
 - **浏览器里使用 Linux 微信**：容器内置 Selkies 远程桌面，打开浏览器就能扫码、登录和操作微信。
 - **读取微信本地数据库**：通过 Python 版 `sqlcipher3-binary` 只读打开 Linux 微信 4.x 数据库，读取联系人、文本消息，以及图片、视频、文件等消息元数据。
 - **给 AI 客户端提供 MCP**：默认暴露 Streamable HTTP MCP endpoint，Claude Code、OpenClaw 等客户端可以直接接入。
-- **执行少量 RPA 操作**：目前重点支持文本发送、群公告、退群等已经在 Linux 侧迁移的动作。发送前建议先 dry run，再由人确认。
+- **执行受控 RPA 操作**：支持发送文本/文件、拍一拍、群公告、退群、邀请/移除群成员、修改群名和群内昵称。写操作建议先 dry run，再由人确认。
 - **管理和调试运行时**：内置管理台可以查看数据库、队列、RPA、窗口尺寸、YOLO、插件和日志状态，也可以一键重扫数据库、重置微信窗口尺寸。
 - **保留插件体系**：沿用上游 `wechat_ai.plugins` entry point 模型，方便后续迁移和扩展业务插件。
 
@@ -79,9 +79,9 @@ http://localhost:8100/mcp
 1. `get_runtime_status`：确认数据库、RPA 和微信窗口状态。
 2. `search_contacts` 或 `get_contact_detail`：解析联系人或群聊。
 3. `get_recent_messages`、`search_text_messages` 或 `get_chat_summary_context`：读取必要上下文。
-4. `send_text_msg`，并设置 `dry_run=true`：只解析目标，不真正发送。
-5. 把收件人和完整发送内容展示给人确认。
-6. 人明确确认后，再调用 `send_text_msg` 发送。
+4. 调用写操作前先设置 `dry_run=true`，只解析目标和参数，不真正执行。
+5. 把收件人、群聊、完整文本或群操作参数展示给人确认。
+6. 人明确确认后，再调用对应写工具执行。
 
 更完整的工具说明和客户端配置见 [MCP 使用指南](docs/mcp.md)。
 
@@ -110,17 +110,14 @@ http://localhost:8100/mcp
 已经迁移的写操作：
 
 - `send_text_msg`：发送文本消息。默认会等待本地 RPA 执行结果；传 `wait_seconds=0` 可只入队不等待。
+- `send_file_msg`：发送容器内可访问的本地文件。
+- `send_pat_msg`：对联系人或群内成员执行“拍一拍”。
 - `public_room_announcement`：发布或编辑群公告。
 - `leave_room`：退群。
+- `remove_room_member` / `invite_room_member`：移除或邀请群成员。
+- `rename_room_name` / `rename_name_in_room`：修改群名或自己在群内的昵称。
 
-暂未迁移的工具会返回 `status: "unavailable"`，不会假装成功：
-
-- `send_file_msg`
-- `send_pat_msg`
-- `remove_room_member`
-- `invite_room_member`
-- `rename_room_name`
-- `rename_name_in_room`
+这些写操作都依赖当前微信界面、窗口尺寸、OCR 和 YOLO 识别结果。调用前建议先看 `get_wechat_window_status`，异常时先执行 `reset_wechat_window`。群成员、群名、退群、群公告属于高影响操作，必须由人明确确认。
 
 ## 管理台
 

@@ -24,6 +24,18 @@ class CommandDispatcher(Protocol):
         """
         ...
 
+    def dispatch_rpa_wait(
+        self,
+        action_type: str,
+        action_data: Dict[str, Any],
+        timeout: float = 0,
+    ) -> Dict[str, Any]:
+        """
+        分发一个RPA操作，并在支持时等待本地 RPA 执行结果。
+        MQTT 等远程转发实现可以只返回 queued。
+        """
+        ...
+
     def dispatch_wait(
         self,
         topic: str,

@@ -161,8 +161,9 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         instructions="""
         You are a WeChat assistant powered by WeChat-AI Bot (Linux).
         - Query contacts and message history through read-only Linux WeChat SQLCipher DB access.
-        - Send text messages via the local RPA queue. Use dry_run=true before sending.
-        - Queue only the Linux-ported group actions: public_room_announcement and leave_room.
+        - Send text, files, pat messages, and supported group actions via the local RPA queue.
+        - Use dry_run=true before sending or changing group state when the tool supports it.
+        - High-impact group operations require explicit human confirmation.
         - Treat status="unavailable" as a hard failure for tools that are not yet ported.
         Use exact nicknames or WeChat IDs when calling tools.
         """,
@@ -214,6 +215,78 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         except (TypeError, ValueError):
             number = default
         return max(minimum, min(number, maximum))
+
+    def _resolve_rpa_target(name: str) -> dict[str, Any]:
+        raw_name = str(name or "").strip()
+        contact = _resolve_contact_name(raw_name)
+        if contact:
+            username = str(getattr(contact, "username", "") or "")
+            display_name = str(getattr(contact, "display_name", "") or username)
+            is_chatroom = username.endswith("@chatroom")
+            return {
+                "input": raw_name,
+                "username": username,
+                "display_name": display_name,
+                "target": display_name,
+                "is_chatroom": is_chatroom,
+                "contact": _contact_payload(contact),
+            }
+        is_chatroom = raw_name.endswith("@chatroom") or "群" in raw_name or "group" in raw_name.lower()
+        username = hashlib.md5(raw_name.encode()).hexdigest() if raw_name else ""
+        if username and is_chatroom:
+            username += "@chatroom"
+        return {
+            "input": raw_name,
+            "username": username,
+            "display_name": raw_name,
+            "target": raw_name,
+            "is_chatroom": is_chatroom,
+            "contact": None,
+        }
+
+    def _dispatch_rpa_tool(
+        ctx: Context,
+        *,
+        tool_name: str,
+        action_type: str,
+        action_data: dict[str, Any],
+        dry_run: bool,
+        wait_seconds: Optional[float],
+        extra: Optional[dict[str, Any]] = None,
+    ) -> str:
+        action_type_value = action_type.value if isinstance(action_type, RPAActionType) else str(action_type)
+        response: dict[str, Any] = {
+            "status": "dry_run" if dry_run else "queued",
+            "tool": tool_name,
+            "action_type": action_type_value,
+            "action_data": action_data,
+        }
+        if extra:
+            response.update(extra)
+        if dry_run:
+            return _json(response)
+        app_context = _get_app_context_from_request(ctx)
+        wait_timeout = _bounded_float(wait_seconds, 12, 0, 30)
+        dispatch_rpa_wait = getattr(app_context.command_dispatcher, "dispatch_rpa_wait", None)
+        if callable(dispatch_rpa_wait):
+            dispatch_result = dispatch_rpa_wait(
+                action_type_value,
+                action_data,
+                timeout=wait_timeout,
+            )
+        else:
+            message = app_context.command_dispatcher.dispatch_rpa(action_type_value, action_data)
+            dispatch_result = {
+                "status": "queued",
+                "queued": True,
+                "completed": False,
+                "dispatcher": type(app_context.command_dispatcher).__name__,
+                "message": message,
+            }
+        response.update(dispatch_result)
+        response["dispatcher"] = type(app_context.command_dispatcher).__name__
+        response["wait_seconds"] = wait_timeout
+        return _json(response)
 
     def _bounded_float(value: Any, default: float, minimum: float, maximum: float) -> float:
         try:
@@ -930,17 +1003,10 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         if not message:
             return _json({"status": "invalid_request", "message": "message is required"})
 
-        recipient = _resolve_contact_name(recipient_name)
-        if recipient:
-            username = recipient.username
-            nickname = recipient.display_name
-            is_chatroom = recipient.username.endswith("@chatroom")
-        else:
-            is_chatroom = "群" in recipient_name or "group" in recipient_name.lower()
-            username = hashlib.md5(recipient_name.encode()).hexdigest()
-            if is_chatroom:
-                username += "@chatroom"
-            nickname = recipient_name
+        resolved = _resolve_rpa_target(recipient_name)
+        username = resolved["username"]
+        nickname = resolved["target"]
+        is_chatroom = bool(resolved["is_chatroom"])
 
         topic = f"msg/{app_context.userinfo.account}/rpa_action"
         payload = {
@@ -955,12 +1021,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         response = {
             "status": "dry_run" if dry_run else "queued",
             "recipient_name": recipient_name,
-            "resolved": {
-                "username": username,
-                "display_name": nickname,
-                "is_chatroom": is_chatroom,
-                "contact": _contact_payload(recipient) if recipient else None,
-            },
+            "resolved": resolved,
             "message_preview": message[:200],
             "at_user_name": at_user_name,
         }
@@ -985,22 +1046,80 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
 
     @mcp.tool()
     @handle_tool_exceptions
-    def send_file_msg(ctx: Context, recipient_name: str, file_path: str) -> str:
-        """Report that Linux RPA file sending is not available yet."""
-        return _unavailable_tool(
-            "send_file_msg",
-            "Linux SendFileAction has not been ported yet. Database media read paths are available through dashboard and message tools.",
+    def send_file_msg(
+        ctx: Context,
+        recipient_name: str,
+        file_path: str,
+        dry_run: bool = False,
+        wait_seconds: Optional[float] = 12,
+    ) -> str:
+        """
+        Send a local file to a user or group via RPA.
+        file_path must be readable inside the container.
+        """
+        if not str(recipient_name or "").strip():
+            return _json({"status": "invalid_request", "message": "recipient_name is required"})
+        path = Path(str(file_path or "")).expanduser()
+        if not path.is_file():
+            return _json(
+                {
+                    "status": "invalid_request",
+                    "message": "file_path must point to an existing file inside the container",
+                    "file_path": str(file_path or ""),
+                }
+            )
+        resolved = _resolve_rpa_target(recipient_name)
+        action_data = {
+            "target": resolved["target"],
+            "file_path": str(path.resolve()),
+            "is_chatroom": bool(resolved["is_chatroom"]),
+        }
+        return _dispatch_rpa_tool(
+            ctx,
+            tool_name="send_file_msg",
+            action_type=RPAActionType.SEND_FILE.value,
+            action_data=action_data,
+            dry_run=dry_run,
+            wait_seconds=wait_seconds,
+            extra={
+                "recipient_name": recipient_name,
+                "resolved": resolved,
+                "file_path": str(path.resolve()),
+            },
         )
 
     @mcp.tool()
     @handle_tool_exceptions
     def send_pat_msg(
-        ctx: Context, user_name: str, room_name: Optional[str] = None
+        ctx: Context,
+        user_name: str,
+        room_name: Optional[str] = None,
+        dry_run: bool = False,
+        wait_seconds: Optional[float] = 12,
     ) -> str:
-        """Report that Linux RPA 'pat' (拍一拍) is not available yet."""
-        return _unavailable_tool(
-            "send_pat_msg",
-            "Linux PatAction has not been ported yet.",
+        """Send a WeChat pat (拍一拍) in a direct chat or a group chat."""
+        user_name = str(user_name or "").strip()
+        room_name = str(room_name or "").strip() if room_name else None
+        if not user_name:
+            return _json({"status": "invalid_request", "message": "user_name is required"})
+        resolved = _resolve_rpa_target(room_name or user_name)
+        action_data = {
+            "target": resolved["target"],
+            "user_name": user_name,
+            "is_chatroom": bool(room_name),
+        }
+        return _dispatch_rpa_tool(
+            ctx,
+            tool_name="send_pat_msg",
+            action_type=RPAActionType.PAT.value,
+            action_data=action_data,
+            dry_run=dry_run,
+            wait_seconds=wait_seconds,
+            extra={
+                "room_name": room_name,
+                "user_name": user_name,
+                "resolved": resolved,
+            },
         )
 
     @mcp.tool()
@@ -1046,38 +1165,122 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
 
     @mcp.tool()
     @handle_tool_exceptions
-    def remove_room_member(ctx: Context, room_name: str, member_name: str) -> str:
-        """Report that Linux RPA member removal is not available yet."""
-        return _unavailable_tool(
-            "remove_room_member",
-            "Linux RemoveRoomMemberAction has not been ported yet.",
+    def remove_room_member(
+        ctx: Context,
+        room_name: str,
+        member_name: str,
+        dry_run: bool = False,
+        wait_seconds: Optional[float] = 12,
+    ) -> str:
+        """Remove a member from a group chat via RPA."""
+        room_name = str(room_name or "").strip()
+        member_name = str(member_name or "").strip()
+        if not room_name or not member_name:
+            return _json({"status": "invalid_request", "message": "room_name and member_name are required"})
+        resolved = _resolve_rpa_target(room_name)
+        action_data = {"target": resolved["target"], "user_name": member_name}
+        return _dispatch_rpa_tool(
+            ctx,
+            tool_name="remove_room_member",
+            action_type=RPAActionType.REMOVE_ROOM_MEMBER.value,
+            action_data=action_data,
+            dry_run=dry_run,
+            wait_seconds=wait_seconds,
+            extra={
+                "room_name": room_name,
+                "member_name": member_name,
+                "resolved": resolved,
+            },
         )
 
     @mcp.tool()
     @handle_tool_exceptions
-    def invite_room_member(ctx: Context, room_name: str, user_name: str) -> str:
-        """Report that Linux RPA room invitation is not available yet."""
-        return _unavailable_tool(
-            "invite_room_member",
-            "Linux Invite2RoomAction has not been ported yet.",
+    def invite_room_member(
+        ctx: Context,
+        room_name: str,
+        user_name: str,
+        dry_run: bool = False,
+        wait_seconds: Optional[float] = 12,
+    ) -> str:
+        """Invite a contact into a group chat via RPA."""
+        room_name = str(room_name or "").strip()
+        user_name = str(user_name or "").strip()
+        if not room_name or not user_name:
+            return _json({"status": "invalid_request", "message": "room_name and user_name are required"})
+        resolved = _resolve_rpa_target(room_name)
+        action_data = {"target": resolved["target"], "user_name": user_name}
+        return _dispatch_rpa_tool(
+            ctx,
+            tool_name="invite_room_member",
+            action_type=RPAActionType.INVITE_2_ROOM.value,
+            action_data=action_data,
+            dry_run=dry_run,
+            wait_seconds=wait_seconds,
+            extra={
+                "room_name": room_name,
+                "user_name": user_name,
+                "resolved": resolved,
+            },
         )
 
     @mcp.tool()
     @handle_tool_exceptions
-    def rename_room_name(ctx: Context, room_name: str, new_name: str) -> str:
-        """Report that Linux RPA room rename is not available yet."""
-        return _unavailable_tool(
-            "rename_room_name",
-            "Linux RenameRoomNameAction has not been ported yet.",
+    def rename_room_name(
+        ctx: Context,
+        room_name: str,
+        new_name: str,
+        dry_run: bool = False,
+        wait_seconds: Optional[float] = 12,
+    ) -> str:
+        """Rename a group chat via RPA."""
+        room_name = str(room_name or "").strip()
+        new_name = str(new_name or "").strip()
+        if not room_name or not new_name:
+            return _json({"status": "invalid_request", "message": "room_name and new_name are required"})
+        resolved = _resolve_rpa_target(room_name)
+        action_data = {"target": resolved["target"], "name": new_name}
+        return _dispatch_rpa_tool(
+            ctx,
+            tool_name="rename_room_name",
+            action_type=RPAActionType.RENAME_ROOM_NAME.value,
+            action_data=action_data,
+            dry_run=dry_run,
+            wait_seconds=wait_seconds,
+            extra={
+                "room_name": room_name,
+                "new_name": new_name,
+                "resolved": resolved,
+            },
         )
 
     @mcp.tool()
     @handle_tool_exceptions
-    def rename_name_in_room(ctx: Context, room_name: str, new_name_in_room: str) -> str:
-        """Report that Linux RPA in-room nickname rename is not available yet."""
-        return _unavailable_tool(
-            "rename_name_in_room",
-            "Linux RenameNameInRoomAction has not been ported yet.",
+    def rename_name_in_room(
+        ctx: Context,
+        room_name: str,
+        new_name_in_room: str,
+        dry_run: bool = False,
+        wait_seconds: Optional[float] = 12,
+    ) -> str:
+        """Rename the current user's display name in a group chat via RPA."""
+        room_name = str(room_name or "").strip()
+        new_name_in_room = str(new_name_in_room or "").strip()
+        if not room_name or not new_name_in_room:
+            return _json({"status": "invalid_request", "message": "room_name and new_name_in_room are required"})
+        resolved = _resolve_rpa_target(room_name)
+        action_data = {"target": resolved["target"], "name": new_name_in_room}
+        return _dispatch_rpa_tool(
+            ctx,
+            tool_name="rename_name_in_room",
+            action_type=RPAActionType.RENAME_NAME_IN_ROOM.value,
+            action_data=action_data,
+            dry_run=dry_run,
+            wait_seconds=wait_seconds,
+            extra={
+                "room_name": room_name,
+                "new_name_in_room": new_name_in_room,
+                "resolved": resolved,
+            },
         )
 
     return mcp

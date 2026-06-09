@@ -14,11 +14,11 @@ MCP Server 能读取聊天记录并提交微信 RPA 动作，只适合作为内�
 2. 如果窗口状态异常，调用 `reset_wechat_window` 修正微信窗口尺寸和布局。
 3. 调用 `search_contacts` 或 `get_contact_detail`，解析精确联系人或群聊。
 4. 调用 `get_recent_messages`、`search_text_messages` 或 `get_chat_summary_context`，读取必要上下文。
-5. 发消息前先调用 `send_text_msg` 并设置 `dry_run=true`。
-6. 把解析到的目标和即将发送的文本展示给人类确认。
-7. 人类明确确认后，再调用 `send_text_msg` 发送。
+5. 调用写操作前先设置 `dry_run=true`，只解析目标和参数。
+6. 把解析到的目标、完整文本或群操作参数展示给人类确认。
+7. 人类明确确认后，再调用对应写工具执行。
 
-`leave_room`、`public_room_announcement` 这类群操作必须要求用户明确提出该操作，不能由 Agent 自行推断执行。
+`leave_room`、`public_room_announcement`、`remove_room_member`、`invite_room_member`、`rename_room_name`、`rename_name_in_room` 这类群操作必须要求用户明确提出该操作，不能由 Agent 自行推断执行。
 
 ## 客户端接入
 
@@ -113,21 +113,16 @@ OpenClaw 或类似支持 MCP JSON 配置的客户端可使用 Streamable HTTP：
 | 工具 | 用途 | 注意 |
 | --- | --- | --- |
 | `send_text_msg` | 文本消息入 RPA 队列并可等待执行结果 | 发送前先用 `dry_run=true` |
+| `send_file_msg` | 发送容器内可访问的本地文件 | `file_path` 必须是容器内路径 |
+| `send_pat_msg` | 对联系人或群成员执行“拍一拍” | 群内拍一拍要求目标头像在当前消息区可见 |
 | `public_room_announcement` | 群公告入 RPA 队列 | 需要账号有群管理权限 |
 | `leave_room` | 退群操作入 RPA 队列 | 破坏性操作，必须人工确认 |
+| `remove_room_member` | 移除群成员 | 破坏性操作，必须人工确认 |
+| `invite_room_member` | 邀请联系人进群 | 需要当前账号有权限 |
+| `rename_room_name` | 修改群名 | 高影响操作，必须人工确认 |
+| `rename_name_in_room` | 修改自己在群内的昵称 | 高影响操作，必须人工确认 |
 
-### Linux 侧尚未移植
-
-以下工具仍保留注册，但会返回 `status: "unavailable"`：
-
-- `send_file_msg`
-- `send_pat_msg`
-- `remove_room_member`
-- `invite_room_member`
-- `rename_room_name`
-- `rename_name_in_room`
-
-保留这些工具是为了稳定 API 形态；在 Linux RPA handler 移植完成前，Agent 不能把它们当成成功动作。
+这些写操作都依赖当前微信界面、窗口尺寸、OCR 和 YOLO 识别结果。调用前建议先确认 `get_wechat_window_status` 返回窗口已对齐；异常时先调用 `reset_wechat_window`。
 
 ## 示例
 

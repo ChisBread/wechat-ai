@@ -40,6 +40,19 @@ class QueueCommandDispatcher:
     ) -> Dict[str, Any]:
         """Dispatch a message and optionally wait for local RPA execution status."""
         action = self._message_action(payload)
+        return self._dispatch_action_wait(action, timeout)
+
+    def dispatch_rpa_wait(
+        self,
+        action_type: str,
+        action_data: Dict[str, Any],
+        timeout: float = 0,
+    ) -> Dict[str, Any]:
+        """Dispatch a direct RPA action and optionally wait for local execution status."""
+        action = self._rpa_action(action_type, action_data)
+        return self._dispatch_action_wait(action, timeout)
+
+    def _dispatch_action_wait(self, action: Any, timeout: float = 0) -> Dict[str, Any]:
         result_queue = Queue(maxsize=1) if timeout and timeout > 0 else None
         if result_queue is not None and hasattr(action, "result_queue"):
             action.result_queue = result_queue
@@ -89,16 +102,49 @@ class QueueCommandDispatcher:
                 at_user_name=at_list[0] if at_list else None,
             )
         if local_type == MessageType.File:
-            raise NotImplementedError("SendFileAction has not been ported to Linux RPA yet.")
+            from wechat_ai_bot.rpa.action_handlers import SendFileAction
+
+            return SendFileAction(
+                file_path=str(
+                    payload.get("file_path")
+                    or payload.get("path")
+                    or payload.get("file_url")
+                    or payload.get("message_content")
+                    or ""
+                ),
+                target=str(payload.get("nickname") or payload.get("target") or ""),
+                is_chatroom=bool(payload.get("is_chatroom")),
+            )
         if local_type == MessageType.Pat:
-            raise NotImplementedError("PatAction has not been ported to Linux RPA yet.")
+            from wechat_ai_bot.rpa.action_handlers import PatAction
+
+            target = str(
+                payload.get("nickname")
+                or payload.get("target")
+                or payload.get("room_name")
+                or payload.get("user_name")
+                or ""
+            )
+            return PatAction(
+                target=target,
+                user_name=str(payload.get("user_name") or target),
+                is_chatroom=bool(payload.get("is_chatroom") or payload.get("room_name")),
+            )
         raise NotImplementedError(f"Unsupported MCP message local_type: {local_type!r}")
 
     def _rpa_action(self, action_type: str, action_data: Dict[str, Any]) -> Any:
+        action_data = action_data or {}
         if isinstance(action_type, RPAActionType):
             action_type_value = action_type.value
         else:
             action_type_value = str(action_type)
+
+        def value(*keys: str) -> str:
+            for key in keys:
+                item = action_data.get(key)
+                if item is not None and str(item) != "":
+                    return str(item)
+            return ""
 
         if action_type_value == RPAActionType.PUBLIC_ROOM_ANNOUNCEMENT.value:
             from wechat_ai_bot.rpa.action_handlers import PublicRoomAnnouncementAction
@@ -112,6 +158,74 @@ class QueueCommandDispatcher:
             from wechat_ai_bot.rpa.action_handlers import LeaveRoomAction
 
             return LeaveRoomAction(target=str(action_data.get("target") or ""))
+        if action_type_value in (RPAActionType.SEND_FILE.value, "send_file_msg"):
+            from wechat_ai_bot.rpa.action_handlers import SendFileAction
+
+            target = value("target", "nickname", "recipient_name", "room_name")
+            return SendFileAction(
+                file_path=value("file_path", "path", "file_url", "url"),
+                target=target,
+                is_chatroom=bool(
+                    action_data.get("is_chatroom")
+                    or action_data.get("room_name")
+                    or target.endswith("@chatroom")
+                ),
+            )
+        if action_type_value in (RPAActionType.PAT.value, "send_pat_msg"):
+            from wechat_ai_bot.rpa.action_handlers import PatAction
+
+            target = value("target", "room_name", "nickname", "recipient_name", "user_name")
+            user_name = value("user_name", "member_name") or target
+            return PatAction(
+                target=target,
+                user_name=user_name,
+                is_chatroom=bool(
+                    action_data.get("is_chatroom")
+                    or action_data.get("room_name")
+                    or target.endswith("@chatroom")
+                ),
+            )
+        if action_type_value in (
+            RPAActionType.REMOVE_ROOM_MEMBER.value,
+            "remove_room_member",
+        ):
+            from wechat_ai_bot.rpa.action_handlers import RemoveRoomMemberAction
+
+            return RemoveRoomMemberAction(
+                target=value("target", "room_name"),
+                user_name=value("user_name", "member_name"),
+            )
+        if action_type_value in (
+            RPAActionType.INVITE_2_ROOM.value,
+            "invite_2_room",
+            "invite_room_member",
+        ):
+            from wechat_ai_bot.rpa.action_handlers import Invite2RoomAction
+
+            return Invite2RoomAction(
+                target=value("target", "room_name"),
+                user_name=value("user_name", "member_name", "contact_name"),
+            )
+        if action_type_value in (
+            RPAActionType.RENAME_ROOM_NAME.value,
+            "rename_room_name",
+        ):
+            from wechat_ai_bot.rpa.action_handlers import RenameRoomNameAction
+
+            return RenameRoomNameAction(
+                target=value("target", "room_name"),
+                name=value("name", "new_name"),
+            )
+        if action_type_value in (
+            RPAActionType.RENAME_NAME_IN_ROOM.value,
+            "rename_name_in_room",
+        ):
+            from wechat_ai_bot.rpa.action_handlers import RenameNameInRoomAction
+
+            return RenameNameInRoomAction(
+                target=value("target", "room_name"),
+                name=value("name", "new_name_in_room", "new_name"),
+            )
 
         raise NotImplementedError(
             f"RPA action '{action_type_value}' has not been ported to Linux RPA yet."
@@ -151,6 +265,14 @@ class UnavailableCommandDispatcher:
         raise ConnectionError(self.reason)
 
     def dispatch_rpa(self, action_type: str, action_data: Dict[str, Any]) -> str:
+        raise ConnectionError(self.reason)
+
+    def dispatch_rpa_wait(
+        self,
+        action_type: str,
+        action_data: Dict[str, Any],
+        timeout: float = 0,
+    ) -> Dict[str, Any]:
         raise ConnectionError(self.reason)
 
 
@@ -205,3 +327,19 @@ class MqttCommandDispatcher:
         }
         self.dispatch(topic, payload)
         return f"RPA操作 '{str(action_type)}' 已成功提交。"
+
+    def dispatch_rpa_wait(
+        self,
+        action_type: str,
+        action_data: Dict[str, Any],
+        timeout: float = 0,
+    ) -> Dict[str, Any]:
+        message = self.dispatch_rpa(action_type, action_data)
+        return {
+            "status": "queued",
+            "queued": True,
+            "completed": False,
+            "dispatcher": type(self).__name__,
+            "wait_supported": False,
+            "message": message,
+        }
