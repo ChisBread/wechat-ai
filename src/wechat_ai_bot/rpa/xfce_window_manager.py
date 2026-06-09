@@ -1,10 +1,11 @@
 """Openbox/X11 window manager using xdotool + mss."""
 
 import logging
+import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from wechat_ai_bot.rpa.image_processor import ImageProcessor
 from wechat_ai_bot.rpa.ocr_processor import OCRProcessor
@@ -45,6 +46,8 @@ class XFCEWindowManager:
         self.SIDE_BAR_WIDTH = self.SESSION_LIST_WIDTH = self.TITLE_BAR_HEIGHT = 0
         self.target_window_size = (self.size_config.width, self.size_config.height)
         self.actual_window_geometry = {}
+        self.window_aligned = False
+        self.window_id: Optional[str] = None
         self.last_window_state = "not_initialized"
 
         self.ICON_CONFIGS = {
@@ -55,6 +58,7 @@ class XFCEWindowManager:
         self.image_processor = image_processor
         self.ocr_processor = ocr_processor
         self.last_switch_session = None
+        self.last_switch_session_time = None
         self.current_session_name = ""
         self.action_delay = self.rpa_config.get("action_delay", 0.3)
         self.scroll_delay = self.rpa_config.get("scroll_delay", 1)
@@ -67,9 +71,26 @@ class XFCEWindowManager:
             and geom["height"] >= self.MIN_MAIN_WINDOW_HEIGHT
         )
 
-    def _find_wechat_window(self) -> Optional[str]:
+    def _managed_window_ids(self) -> set[str]:
+        """Return top-level windows known by the window manager."""
+        try:
+            r = _run("xprop", "-root", "_NET_CLIENT_LIST")
+        except Exception:
+            return set()
+        if r.returncode != 0:
+            return set()
+        ids = set()
+        for token in re.findall(r"0x[0-9a-fA-F]+", r.stdout):
+            try:
+                ids.add(str(int(token, 16)))
+            except ValueError:
+                continue
+        return ids
+
+    def _find_wechat_window(self, *, log: bool = True) -> Optional[str]:
         candidates = []
         seen = set()
+        managed_ids = self._managed_window_ids()
         for query in (
             ("search", "--class", "wechat"),
             ("search", "--name", "WeChat"),
@@ -86,29 +107,34 @@ class XFCEWindowManager:
                     continue
                 name = _run("xdotool", "getwindowname", wid).stdout.strip()
                 area = geom["width"] * geom["height"]
-                candidates.append((area, wid, geom, name))
+                candidates.append((area, wid, geom, name, wid in managed_ids))
 
+        managed_candidates = [item for item in candidates if item[4]]
+        source = managed_candidates or candidates
         visible = [
-            item for item in candidates
+            item for item in source
             if item[3] in {"WeChat", "Weixin", "微信"}
             and item[2]["width"] >= 250
             and item[2]["height"] >= 300
         ]
         if not visible:
-            self.logger.warning("No visible WeChat window candidates: %s", candidates)
+            if log:
+                self.logger.warning("No visible WeChat window candidates: %s", candidates)
             return None
 
         visible.sort(reverse=True, key=lambda item: item[0])
-        area, wid, geom, name = visible[0]
-        self.logger.info(
-            "Selected WeChat window %s '%s' at %s,%s %sx%s",
-            wid,
-            name,
-            geom["x"],
-            geom["y"],
-            geom["width"],
-            geom["height"],
-        )
+        area, wid, geom, name, managed = visible[0]
+        if log:
+            self.logger.info(
+                "Selected WeChat window %s '%s' at %s,%s %sx%s managed=%s",
+                wid,
+                name,
+                geom["x"],
+                geom["y"],
+                geom["width"],
+                geom["height"],
+                managed,
+            )
         return wid
 
     def _find_green_button_center(self, geom: dict) -> Optional[tuple[int, int]]:
@@ -236,6 +262,70 @@ class XFCEWindowManager:
         self.target_window_size = (target_w, target_h)
         return target_w, target_h
 
+    def _geometry_matches_target(
+        self,
+        geom: Optional[dict],
+        target_w: Optional[int] = None,
+        target_h: Optional[int] = None,
+    ) -> bool:
+        if not geom:
+            return False
+        target_w = target_w or self.target_window_size[0]
+        target_h = target_h or self.target_window_size[1]
+        tolerance = int(self.rpa_config.get("window", {}).get("size_tolerance", 8))
+        return (
+            abs(geom["width"] - target_w) <= tolerance
+            and abs(geom["height"] - target_h) <= tolerance
+            and abs(geom["x"]) <= tolerance
+            and abs(geom["y"]) <= tolerance
+        )
+
+    def _clear_session_cache(self) -> None:
+        self.last_switch_session = None
+        self.last_switch_session_time = None
+        self.current_session_name = ""
+
+    def _set_current_layout(self, w: int, h: int) -> None:
+        self.weixin_windows["WeChat"] = {
+            "MSG_TOP_X": self.MSG_TOP_X,
+            "MSG_TOP_Y": self.MSG_TOP_Y,
+            "MSG_WIDTH": self.MSG_WIDTH,
+            "MSG_HEIGHT": self.MSG_HEIGHT,
+            "region": [0, 0, w, h],
+        }
+        self.current_window = self.weixin_windows["WeChat"]
+        self.window_aligned = True
+
+    def refresh_window_geometry(self) -> dict:
+        """Refresh actual X11 geometry for dashboard/status without mutating layout."""
+        wid = self._find_wechat_window(log=False)
+        if not wid:
+            self.last_window_state = "window_not_found"
+            self.actual_window_geometry = {}
+            self.window_aligned = False
+            return {}
+
+        geom = self._window_geometry(wid)
+        if not geom:
+            self.last_window_state = "window_geometry_unavailable"
+            self.actual_window_geometry = {}
+            self.window_aligned = False
+            return {}
+
+        self.window_id = wid
+        self.actual_window_geometry = geom
+        if not self._is_main_wechat_window(geom):
+            self.last_window_state = "waiting_mobile_confirmation"
+            self.window_aligned = False
+        elif self._geometry_matches_target(geom):
+            self.window_aligned = True
+            if self.current_window:
+                self.last_window_state = "ready"
+        else:
+            self.last_window_state = "geometry_drift"
+            self.window_aligned = False
+        return geom
+
     def _normalize_dpi(self) -> None:
         """Keep the WeChat/RPA window in physical pixels instead of Selkies HiDPI."""
         try:
@@ -273,6 +363,75 @@ class XFCEWindowManager:
                 geom["height"],
             )
         return self._window_geometry(wid)
+
+    def ensure_action_ready(self, action: Any = None) -> bool:
+        """Normalize WeChat state before any visual RPA action."""
+        action_name = getattr(getattr(action, "action_type", None), "name", "")
+        self.logger.info("Ensuring WeChat window state before RPA action: %s", action_name or "unknown")
+        try:
+            if not subprocess.run(["pgrep", "-x", "wechat"], capture_output=True).stdout.strip():
+                self.last_window_state = "wechat_not_running"
+                self.window_aligned = False
+                self.logger.error("WeChat not running")
+                return False
+
+            wid = self._find_wechat_window()
+            if not wid:
+                self.last_window_state = "window_not_found"
+                self.window_aligned = False
+                return False
+            if not self._enter_wechat_if_needed(wid):
+                self.window_aligned = False
+                return False
+
+            self._normalize_dpi()
+            w, h = self._target_window_size()
+            if w <= 0 or h <= 0:
+                self.window_aligned = False
+                return False
+
+            geom = self._window_geometry(wid)
+            needs_relayout = not self.current_window
+            if not self._geometry_matches_target(geom, w, h):
+                self.logger.warning(
+                    "WeChat window drifted before RPA action: got %s, target=%sx%s",
+                    geom,
+                    w,
+                    h,
+                )
+                geom = self._resize_wechat_window(wid, w, h)
+                self._clear_session_cache()
+                needs_relayout = True
+            else:
+                _run("xdotool", "windowraise", wid)
+                _run("xdotool", "windowactivate", wid)
+
+            time.sleep(self.window_show_delay)
+            self.actual_window_geometry = geom or {}
+            self.window_id = wid
+            if not self._geometry_matches_target(geom, w, h):
+                self.last_window_state = "resize_mismatch"
+                self.window_aligned = False
+                self.logger.error("WeChat window is not aligned to target geometry")
+                return False
+
+            self.size_config.width = w
+            self.size_config.height = h
+            if needs_relayout:
+                if not self._init_window_part_size():
+                    self.last_window_state = "layout_unavailable"
+                    self.window_aligned = False
+                    return False
+                self._set_current_layout(w, h)
+
+            self.last_window_state = "ready"
+            self.window_aligned = True
+            return True
+        except Exception as exc:
+            self.last_window_state = "ensure_failed"
+            self.window_aligned = False
+            self.logger.error("Failed to ensure WeChat window state: %s", exc, exc_info=True)
+            return False
 
     def _find_vertical_boundary(
         self,
@@ -409,6 +568,7 @@ class XFCEWindowManager:
             time.sleep(self.window_show_delay)
             if geom:
                 self.actual_window_geometry = geom
+                self.window_id = wid
                 self.logger.info(
                     "WeChat geometry: x=%s y=%s %sx%s target=%sx%s",
                     geom["x"],
@@ -426,22 +586,19 @@ class XFCEWindowManager:
                     or abs(geom["y"]) > tolerance
                 ):
                     self.last_window_state = "resize_mismatch"
+                    self.window_aligned = False
                     self.logger.warning("WeChat window is not aligned to target geometry")
                     return False
                 self.size_config.width = w
                 self.size_config.height = h
                 self.last_window_state = "aligned"
+                self.window_aligned = True
             else:
                 self.logger.warning("Using target geometry without window manager confirmation")
 
             time.sleep(self.scroll_delay)
             if self._init_window_part_size():
-                self.weixin_windows["WeChat"] = {
-                    "MSG_TOP_X": self.MSG_TOP_X, "MSG_TOP_Y": self.MSG_TOP_Y,
-                    "MSG_WIDTH": self.MSG_WIDTH, "MSG_HEIGHT": self.MSG_HEIGHT,
-                    "region": [0, 0, w, h],
-                }
-                self.current_window = self.weixin_windows["WeChat"]
+                self._set_current_layout(w, h)
                 self.last_window_state = "ready"
                 return True
             return False
@@ -592,7 +749,7 @@ class XFCEWindowManager:
         return None
 
     def switch_session(self, target: str) -> bool:
-        if self.last_switch_session == target: return True
+        self.logger.info("Switching session to: %s", target)
         time.sleep(self.action_delay); _xdotool("key", "ctrl+f")
         time.sleep(self.action_delay)
         if not set_clipboard_text(target): return False
@@ -600,6 +757,7 @@ class XFCEWindowManager:
         time.sleep(self.action_delay); _xdotool("key", "Return")
         time.sleep(self.switch_contact_delay)
         self.last_switch_session = target
+        self.last_switch_session_time = time.time()
         self.current_session_name = target
         return True
 

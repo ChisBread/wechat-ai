@@ -12,6 +12,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from queue import Empty, Queue
 from typing import Any
 
 from PIL import Image, ImageDraw
@@ -84,6 +85,26 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
             return JSONResponse({"ok": False, "error": "message service unavailable"}, status_code=503)
         message_service.resume()
         return JSONResponse({"ok": True, "message": _call_status(message_service)})
+
+    @mcp.custom_route(f"{prefix}/api/window/reset", methods=["POST"], include_in_schema=False)
+    async def debug_window_reset(request: Request) -> JSONResponse:
+        window_manager = getattr(bot, "window_manager", None)
+        if not window_manager:
+            return JSONResponse({"ok": False, "error": "window manager unavailable"}, status_code=503)
+        ensure_ready = getattr(window_manager, "ensure_action_ready", None)
+        if not callable(ensure_ready):
+            return JSONResponse({"ok": False, "error": "window reset is unavailable"}, status_code=503)
+        ok = bool(ensure_ready())
+        if ok and hasattr(bot, "chat_window_ready"):
+            bot.chat_window_ready = True
+        return JSONResponse(
+            {
+                "ok": ok,
+                "error": "" if ok else "window reset failed",
+                "window": _window_status(window_manager),
+            },
+            status_code=200 if ok else 500,
+        )
 
     @mcp.custom_route(f"{prefix}/api/contacts", methods=["GET"], include_in_schema=False)
     async def debug_contacts(request: Request) -> JSONResponse:
@@ -190,6 +211,11 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         target = str(payload.get("target") or payload.get("recipient_name") or "").strip()
         content = str(payload.get("content") or payload.get("message") or "")
         at_user_name = str(payload.get("at_user_name") or "").strip() or None
+        try:
+            wait_seconds = float(payload.get("wait_seconds", 8))
+        except (TypeError, ValueError):
+            wait_seconds = 8
+        wait_seconds = max(0, min(wait_seconds, 30))
         if not target:
             return JSONResponse({"ok": False, "error": "target is required"}, status_code=400)
         if not content:
@@ -208,20 +234,44 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         queue = getattr(bot, "rpa_task_queue", None)
         if queue is None:
             return JSONResponse({"ok": False, "error": "rpa queue unavailable"}, status_code=503)
+        result_queue = Queue(maxsize=1) if wait_seconds > 0 else None
         action = SendTextMessageAction(
             content=content,
             target=resolved_target,
             is_chatroom=bool(contact and contact.is_chatroom),
             at_user_name=at_user_name,
+            result_queue=result_queue,
         )
         queue.put(action)
+        result = None
+        if result_queue is not None:
+            try:
+                result = result_queue.get(timeout=wait_seconds)
+            except Empty:
+                result = None
+        if result is not None:
+            return JSONResponse(
+                {
+                    "ok": bool(result.get("ok")),
+                    "error": "" if result.get("ok") else "RPA action failed",
+                    "queued": True,
+                    "completed": True,
+                    "target": resolved_target,
+                    "contact": _contact_payload(contact) if contact else None,
+                    "queue_size": queue.qsize(),
+                    "result": result,
+                },
+                status_code=200 if result.get("ok") else 500,
+            )
         return JSONResponse(
             {
                 "ok": True,
                 "queued": True,
+                "completed": False,
                 "target": resolved_target,
                 "contact": _contact_payload(contact) if contact else None,
                 "queue_size": queue.qsize(),
+                "wait_seconds": wait_seconds,
             }
         )
 
@@ -348,7 +398,7 @@ def build_layout_png(bot: Any) -> bytes:
     draw.rectangle([0, 0, width - 1, height - 1], outline="#3b4652", width=2)
     if sidebar > 0:
         draw.rectangle([0, 0, sidebar, height], fill="#d9e2ec", outline="#65758b", width=2)
-        draw.text((12, 14), "sidebar", fill="#22303d")
+        draw.text((12, 14), "侧栏", fill="#22303d")
     if sessions > 0:
         draw.rectangle(
             [sidebar, 0, sidebar + sessions, height],
@@ -356,7 +406,7 @@ def build_layout_png(bot: Any) -> bytes:
             outline="#65758b",
             width=2,
         )
-        draw.text((sidebar + 12, 14), "sessions", fill="#22303d")
+        draw.text((sidebar + 12, 14), "会话列表", fill="#22303d")
     if msg_w > 0 and msg_h > 0:
         draw.rectangle(
             [msg_x, msg_y, msg_x + msg_w, msg_y + msg_h],
@@ -364,10 +414,10 @@ def build_layout_png(bot: Any) -> bytes:
             outline="#18715b",
             width=4,
         )
-        draw.text((msg_x + 12, msg_y + 12), f"message {msg_w}x{msg_h}", fill="#105745")
+        draw.text((msg_x + 12, msg_y + 12), f"消息区域 {msg_w}x{msg_h}", fill="#105745")
     if send and len(send) == 4:
         draw.rectangle([int(v) for v in send], outline="#bb3e03", width=4)
-        draw.text((int(send[0]), max(0, int(send[1]) - 22)), "send", fill="#8a2c02")
+        draw.text((int(send[0]), max(0, int(send[1]) - 22)), "发送", fill="#8a2c02")
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -650,12 +700,17 @@ def _process_status() -> dict[str, Any]:
 def _window_status(window_manager: Any) -> dict[str, Any]:
     if not window_manager:
         return {}
+    refresh = getattr(window_manager, "refresh_window_geometry", None)
+    if callable(refresh):
+        refresh()
     return {
         "current_window": bool(getattr(window_manager, "current_window", None)),
         "state": getattr(window_manager, "last_window_state", ""),
         "message_region": _safe_call(window_manager, "get_message_region"),
         "target_size": getattr(window_manager, "target_window_size", None),
         "actual_geometry": getattr(window_manager, "actual_window_geometry", {}),
+        "aligned": bool(getattr(window_manager, "window_aligned", False)),
+        "window_id": getattr(window_manager, "window_id", None),
         "current_session": mask_value(
             str(_safe_call(window_manager, "get_current_session_name") or "")
         ),

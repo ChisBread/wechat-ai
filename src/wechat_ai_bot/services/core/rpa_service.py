@@ -7,12 +7,12 @@ import logging
 import threading
 import time
 from queue import Empty, Queue
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 from wechat_ai_bot.rpa.rpa_action import RPAAction
 
-# 导入依赖的类型，用于类型提示
-from wechat_ai_bot.rpa.controller import RPAController
+if TYPE_CHECKING:
+    from wechat_ai_bot.rpa.controller import RPAController
 
 
 class RPAService:
@@ -22,7 +22,7 @@ class RPAService:
     其唯一职责是从RPA任务队列中按顺序取出任务，并将其交给RPAController执行。
     """
 
-    def __init__(self, rpa_task_queue: Queue, rpa_controller: RPAController):
+    def __init__(self, rpa_task_queue: Queue, rpa_controller: "RPAController"):
         """
         【轻量级初始化】只接收并保存已创建好的依赖项。
 
@@ -34,7 +34,7 @@ class RPAService:
 
         # --- 1. 保存注入的依赖 ---
         self.task_queue: Queue = rpa_task_queue
-        self.controller: RPAController = rpa_controller
+        self.controller: "RPAController" = rpa_controller
 
         # --- 2. 初始化自身状态 ---
         self.is_running: bool = False
@@ -90,7 +90,16 @@ class RPAService:
                 if task:
                     self.logger.debug(f"Processing RPA action: {task.action_type.name}")
                     # 将任务交给RPAController执行
-                    self.controller.execute_action(task)
+                    success = self.controller.execute_action(task)
+                    result_queue = getattr(task, "result_queue", None)
+                    if result_queue is not None:
+                        result_queue.put(
+                            {
+                                "ok": bool(success),
+                                "action_type": task.action_type.value,
+                                "finished_at": time.time(),
+                            }
+                        )
                     self.task_queue.task_done()
 
             except Empty:

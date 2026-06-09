@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WeChat-AI Manager</title>
+  <title>WeChat-AI 管理台</title>
   <style>
     :root {
       color-scheme: light;
@@ -308,125 +308,126 @@
 <body>
   <header>
     <div>
-      <h1>WeChat-AI Manager</h1>
-      <div id="stamp" class="header-sub">loading</div>
+      <h1>WeChat-AI 管理台</h1>
+      <div id="stamp" class="header-sub">加载中</div>
     </div>
     <div class="toolbar">
-      <button id="refresh">Refresh</button>
-      <button id="rescanDb">Rescan DB</button>
-      <button id="pauseMessages">Pause DB Poll</button>
-      <button id="resumeMessages">Resume DB Poll</button>
+      <button id="refresh">刷新状态</button>
+      <button id="resetWindow" class="primary">重置窗口尺寸</button>
+      <button id="rescanDb">重扫数据库</button>
+      <button id="pauseMessages">暂停数据库监听</button>
+      <button id="resumeMessages">恢复数据库监听</button>
     </div>
   </header>
   <div class="shell">
     <nav>
-      <button class="nav-btn active" data-tab="overview">Overview</button>
-      <button class="nav-btn" data-tab="database">Database</button>
-      <button class="nav-btn" data-tab="messages">Messages</button>
+      <button class="nav-btn active" data-tab="overview">总览</button>
+      <button class="nav-btn" data-tab="database">数据库</button>
+      <button class="nav-btn" data-tab="messages">消息</button>
       <button class="nav-btn" data-tab="rpa">RPA</button>
-      <button class="nav-btn" data-tab="window">Window</button>
-      <button class="nav-btn" data-tab="logs">Logs</button>
+      <button class="nav-btn" data-tab="window">窗口</button>
+      <button class="nav-btn" data-tab="logs">日志</button>
     </nav>
     <main>
       <div id="overview" class="tab active">
         <div class="grid">
-          <section class="span-3"><h2>Runtime</h2><div id="runtime" class="body"></div></section>
+          <section class="span-3"><h2>运行时</h2><div id="runtime" class="body"></div></section>
           <section class="span-3"><h2>Bot</h2><div id="bot" class="body"></div></section>
-          <section class="span-3"><h2>Queues</h2><div id="queues" class="body"></div></section>
-          <section class="span-3"><h2>Input</h2><div id="inputServices" class="body"></div></section>
-          <section class="span-4"><h2>Services</h2><div id="services" class="body"></div></section>
-          <section class="span-4"><h2>Processes</h2><div id="processes" class="body"></div></section>
-          <section class="span-4"><h2>Plugins</h2><div id="plugins" class="body"></div></section>
-          <section class="span-12"><h2>Database Snapshot</h2><div id="databaseOverview" class="body"></div></section>
+          <section class="span-3"><h2>队列</h2><div id="queues" class="body"></div></section>
+          <section class="span-3"><h2>输入源</h2><div id="inputServices" class="body"></div></section>
+          <section class="span-4"><h2>服务</h2><div id="services" class="body"></div></section>
+          <section class="span-4"><h2>进程</h2><div id="processes" class="body"></div></section>
+          <section class="span-4"><h2>插件</h2><div id="plugins" class="body"></div></section>
+          <section class="span-12"><h2>数据库快照</h2><div id="databaseOverview" class="body"></div></section>
         </div>
       </div>
 
       <div id="database" class="tab">
         <div class="grid">
           <section class="span-5"><h2>SQLCipher</h2><div id="databaseDetail" class="body"></div></section>
-          <section class="span-7"><h2>Contact Search</h2><div class="body">
+          <section class="span-7"><h2>联系人搜索</h2><div class="body">
             <div class="row">
               <div class="field wide">
-                <label for="contactQuery">Name / remark / wxid</label>
+                <label for="contactQuery">昵称 / 备注 / wxid</label>
                 <input id="contactQuery" autocomplete="off">
               </div>
               <div class="field">
-                <button id="searchContacts" class="primary">Search</button>
+                <button id="searchContacts" class="primary">搜索</button>
               </div>
             </div>
             <div id="contactStatus" class="statusline"></div>
             <div id="contactResults" class="list"></div>
           </div></section>
-          <section class="span-12"><h2>Accounts</h2><div id="accountList" class="body"></div></section>
+          <section class="span-12"><h2>账号</h2><div id="accountList" class="body"></div></section>
         </div>
       </div>
 
       <div id="messages" class="tab">
         <div class="grid">
-          <section class="span-4"><h2>Query</h2><div class="body">
+          <section class="span-4"><h2>查询</h2><div class="body">
             <div class="row">
               <div class="field full">
-                <label for="msgContact">Contact username or display name</label>
+                <label for="msgContact">联系人 username 或显示名</label>
                 <input id="msgContact" autocomplete="off">
               </div>
               <div class="field full">
-                <label for="msgKeyword">Text contains</label>
+                <label for="msgKeyword">文本包含</label>
                 <input id="msgKeyword" autocomplete="off">
               </div>
               <div class="field">
-                <label for="msgLimit">Limit</label>
+                <label for="msgLimit">数量</label>
                 <input id="msgLimit" type="number" min="1" max="200" value="20">
               </div>
               <div class="field wide actions">
-                <button id="queryMessages" class="primary">Query Text</button>
-                <button id="queryMedia">Check Media</button>
+                <button id="queryMessages" class="primary">查询文本</button>
+                <button id="queryMedia">检查媒体</button>
               </div>
             </div>
             <div id="messageStatus" class="statusline"></div>
           </div></section>
-          <section class="span-8"><h2>Results</h2><div class="body"><div id="messageResults" class="list"></div></div></section>
+          <section class="span-8"><h2>结果</h2><div class="body"><div id="messageResults" class="list"></div></div></section>
         </div>
       </div>
 
       <div id="rpa" class="tab">
         <div class="grid">
-          <section class="span-5"><h2>Send Text</h2><div class="body">
+          <section class="span-5"><h2>发送文本</h2><div class="body">
             <div class="row">
               <div class="field full">
-                <label for="rpaTarget">Target display name or wxid</label>
+                <label for="rpaTarget">目标显示名或 wxid</label>
                 <input id="rpaTarget" autocomplete="off">
               </div>
               <div class="field full">
-                <label for="rpaAt">At user name</label>
+                <label for="rpaAt">@ 用户名</label>
                 <input id="rpaAt" autocomplete="off">
               </div>
               <div class="field full">
-                <label for="rpaContent">Content</label>
+                <label for="rpaContent">内容</label>
                 <textarea id="rpaContent"></textarea>
               </div>
               <div class="field full actions">
-                <button id="sendText" class="primary">Queue Send</button>
+                <button id="sendText" class="primary">发送</button>
               </div>
             </div>
             <div id="rpaStatus" class="statusline"></div>
           </div></section>
-          <section class="span-7"><h2>RPA State</h2><div id="rpaState" class="body"></div></section>
+          <section class="span-7"><h2>RPA 状态</h2><div id="rpaState" class="body"></div></section>
         </div>
       </div>
 
       <div id="window" class="tab">
         <div class="grid">
-          <section class="span-5"><h2>Window</h2><div id="windowState" class="body"></div></section>
-          <section class="span-7"><h2>Layout</h2><div class="body"><img id="layout" class="layout-img" src="/dashboard/layout.png" alt="layout"></div></section>
+          <section class="span-5"><h2>窗口</h2><div id="windowState" class="body"></div></section>
+          <section class="span-7"><h2>布局</h2><div class="body"><img id="layout" class="layout-img" src="/dashboard/layout.png" alt="layout"></div></section>
           <section class="span-12"><h2>YOLO</h2><div id="vision" class="body"></div></section>
         </div>
       </div>
 
       <div id="logs" class="tab">
         <div class="grid">
-          <section class="span-12"><h2>Bot Log</h2><div class="body">
+          <section class="span-12"><h2>Bot 日志</h2><div class="body">
             <div class="actions" style="margin-bottom: 10px;">
-              <button id="loadLogs" class="primary">Reload Logs</button>
+              <button id="loadLogs" class="primary">重新加载日志</button>
               <select id="logLines" style="width: 120px;">
                 <option value="120">120</option>
                 <option value="240" selected>240</option>
@@ -453,7 +454,7 @@
     const pill = (ok, text) => `<span class="pill ${ok ? 'ok' : 'bad'}">${esc(text)}</span>`;
     const warn = (text) => `<span class="pill warn">${esc(text)}</span>`;
     const info = (text) => `<span class="pill info">${esc(text)}</span>`;
-    const bool = (v) => pill(Boolean(v), v ? "yes" : "no");
+    const bool = (v) => pill(Boolean(v), v ? "是" : "否");
     const mono = (v) => `<span class="mono">${esc(v)}</span>`;
     const table = (rows) => `<table class="kv"><tbody>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${v}</td></tr>`).join("")}</tbody></table>`;
     const json = (v) => `<span class="mono">${esc(JSON.stringify(v, null, 2))}</span>`;
@@ -484,59 +485,59 @@
 
     function renderStatus(data) {
       statusData = data;
-      $('stamp').textContent = `updated ${new Date(data.generated_at * 1000).toLocaleString()}`;
+      $('stamp').textContent = `更新于 ${new Date(data.generated_at * 1000).toLocaleString()}`;
       $('runtime').innerHTML = table([
         ['pid', esc(data.runtime.pid)],
-        ['uptime', esc(`${data.runtime.uptime_seconds}s`)],
+        ['运行时长', esc(`${data.runtime.uptime_seconds}s`)],
         ['python', esc(data.runtime.python)],
         ['platform', esc(data.runtime.platform)]
       ]);
       $('bot').innerHTML = table([
-        ['running', bool(data.bot.running)],
-        ['chat ready', bool(data.bot.chat_window_ready)],
-        ['account', esc(data.bot.user.account || '')],
-        ['nickname', esc(data.bot.user.nickname || '')],
-        ['version', esc(data.bot.user.version || '')]
+        ['运行中', bool(data.bot.running)],
+        ['聊天窗口就绪', bool(data.bot.chat_window_ready)],
+        ['账号', esc(data.bot.user.account || '')],
+        ['昵称', esc(data.bot.user.nickname || '')],
+        ['版本', esc(data.bot.user.version || '')]
       ]);
       $('queues').innerHTML = table([
-        ['message', esc(data.queues.message_queue.size)],
+        ['消息', esc(data.queues.message_queue.size)],
         ['rpa', esc(data.queues.rpa_task_queue.size)],
-        ['status', esc(data.queues.status_queue.size)]
+        ['状态', esc(data.queues.status_queue.size)]
       ]);
       $('inputServices').innerHTML = table([
-        ['database poll', serviceBadge(data.services.message)],
-        ['paused', bool(data.services.message.is_paused)],
-        ['visual poll', serviceBadge(data.services.visual)],
-        ['mqtt', data.services.mqtt.enabled ? bool(data.services.mqtt.connected) : warn('disabled')]
+        ['数据库监听', serviceBadge(data.services.message)],
+        ['已暂停', bool(data.services.message.is_paused)],
+        ['视觉监听', serviceBadge(data.services.visual)],
+        ['MQTT', data.services.mqtt.enabled ? bool(data.services.mqtt.connected) : warn('未启用')]
       ]);
       $('services').innerHTML = table([
-        ['processor', serviceBadge(data.services.processor)],
-        ['processor queue', esc(data.services.processor.queue_size ?? '')],
+        ['处理器', serviceBadge(data.services.processor)],
+        ['处理器队列', esc(data.services.processor.queue_size ?? '')],
         ['rpa', serviceBadge(data.services.rpa)],
-        ['rpa queue', esc(data.services.rpa.queue_size ?? '')],
-        ['db message interval', esc(data.services.message.poll_interval ?? '')],
-        ['visual interval', esc(data.services.visual.poll_interval ?? '')]
+        ['RPA 队列', esc(data.services.rpa.queue_size ?? '')],
+        ['数据库轮询间隔', esc(data.services.message.poll_interval ?? '')],
+        ['视觉轮询间隔', esc(data.services.visual.poll_interval ?? '')]
       ]);
       $('processes').innerHTML = table([
-        ['wechat', bool(data.processes.wechat.running)],
-        ['wechat pids', esc((data.processes.wechat.pids || []).join(', '))],
+        ['微信', bool(data.processes.wechat.running)],
+        ['微信 PID', esc((data.processes.wechat.pids || []).join(', '))],
         ['bot', bool(data.processes.bot.running)],
-        ['display', data.processes.display.ok ? info(data.processes.display.stdout) : warn(data.processes.display.stderr || 'unknown')]
+        ['显示器', data.processes.display.ok ? info(data.processes.display.stdout) : warn(data.processes.display.stderr || '未知')]
       ]);
-      $('plugins').innerHTML = `<div class="list">${(data.plugins || []).map(p => `<div class="item"><div class="item-head"><span class="title">${esc(p.name)}</span><span class="pill">${esc(p.priority)}</span></div><div class="sub mono">${esc(p.class)}</div></div>`).join("") || '<span class="muted">none</span>'}</div>`;
+      $('plugins').innerHTML = `<div class="list">${(data.plugins || []).map(p => `<div class="item"><div class="item-head"><span class="title">${esc(p.name)}</span><span class="pill">${esc(p.priority)}</span></div><div class="sub mono">${esc(p.class)}</div></div>`).join("") || '<span class="muted">无</span>'}</div>`;
       renderDatabase(data);
       renderWindow(data);
       $('rpaState').innerHTML = table([
-        ['running', serviceBadge(data.services.rpa)],
-        ['queue size', esc(data.services.rpa.queue_size ?? '')],
-        ['window ready', bool(data.bot.chat_window_ready)],
-        ['current session', esc(data.window.current_session || '')]
+        ['运行中', serviceBadge(data.services.rpa)],
+        ['队列长度', esc(data.services.rpa.queue_size ?? '')],
+        ['窗口就绪', bool(data.bot.chat_window_ready)],
+        ['当前会话', esc(data.window.current_session || '')]
       ]);
       $('layout').src = `${apiPath('/layout.png')}?t=${Date.now()}`;
     }
 
     function serviceBadge(service) {
-      if (!service || Object.keys(service).length === 0) return warn('missing');
+      if (!service || Object.keys(service).length === 0) return warn('缺失');
       const running = service.is_running ?? service.running;
       return bool(running);
     }
@@ -546,19 +547,19 @@
       const discovery = db.discovery || db;
       const available = db.available || db.can_attempt_business_database_open;
       const rows = [
-        ['available', bool(available)],
-        ['driver', esc(db.driver || db.sqlcipher_driver || '')],
-        ['primary', esc(db.primary_account || '')],
-        ['root', esc(db.root || discovery.root || '')],
-        ['accounts', esc(db.account_count || discovery.account_count || 0)],
-        ['db files', esc(db.db_count ?? '')],
-        ['keys', esc(db.key_count ?? db.key_scan?.found_key_count ?? '')],
-        ['message tables', esc(db.message_tables ?? '')],
-        ['contacts', esc(db.contacts ?? '')],
-        ['rooms', esc(db.rooms ?? '')],
-        ['connections', esc(db.open_connections ?? '')],
-        ['last scan', esc(db.last_scan_at ? new Date(db.last_scan_at * 1000).toLocaleString() : '')],
-        ['last error', esc(db.last_error || db.error || '')]
+        ['可用', bool(available)],
+        ['驱动', esc(db.driver || db.sqlcipher_driver || '')],
+        ['主账号', esc(db.primary_account || '')],
+        ['根目录', esc(db.root || discovery.root || '')],
+        ['账号数', esc(db.account_count || discovery.account_count || 0)],
+        ['数据库文件', esc(db.db_count ?? '')],
+        ['密钥', esc(db.key_count ?? db.key_scan?.found_key_count ?? '')],
+        ['消息表', esc(db.message_tables ?? '')],
+        ['联系人', esc(db.contacts ?? '')],
+        ['群聊', esc(db.rooms ?? '')],
+        ['连接数', esc(db.open_connections ?? '')],
+        ['上次扫描', esc(db.last_scan_at ? new Date(db.last_scan_at * 1000).toLocaleString() : '')],
+        ['最近错误', esc(db.last_error || db.error || '')]
       ];
       $('databaseOverview').innerHTML = table(rows.slice(0, 10));
       $('databaseDetail').innerHTML = table(rows);
@@ -570,34 +571,36 @@
               <div class="title">${esc(a.account)}</div>
               <div class="sub mono">${esc(a.storage_suffix || '')}</div>
             </div>
-            ${a.login_key_db || a.login_key_dat ? info('login key') : warn('no login key')}
+            ${a.login_key_db || a.login_key_dat ? info('登录密钥') : warn('无登录密钥')}
           </div>
-          <div class="sub">${esc(a.encrypted_databases)} encrypted / ${esc(a.plaintext_databases)} plain</div>
+          <div class="sub">${esc(a.encrypted_databases)} 个加密库 / ${esc(a.plaintext_databases)} 个明文库</div>
           <div class="sub mono">${esc((a.samples || []).join(', '))}</div>
-        </div>`).join("") || '<span class="muted">no accounts</span>'}</div>`;
+        </div>`).join("") || '<span class="muted">无账号</span>'}</div>`;
     }
 
     function renderWindow(data) {
       $('windowState').innerHTML = table([
-        ['current window', bool(data.window.current_window)],
-        ['state', esc(data.window.state || '')],
-        ['target size', json(data.window.target_size || {})],
-        ['actual geometry', json(data.window.actual_geometry || {})],
-        ['message region', json(data.window.message_region || [])],
-        ['session list width', esc(data.window.session_list_width || '')],
-        ['send button', json(data.window.send_button || [])],
-        ['raw screenshot', data.debug.raw_screenshot_enabled ? info('enabled') : warn('disabled')]
+        ['当前窗口', bool(data.window.current_window)],
+        ['状态', esc(data.window.state || '')],
+        ['已对齐', bool(data.window.aligned)],
+        ['窗口 ID', esc(data.window.window_id || '')],
+        ['目标尺寸', json(data.window.target_size || {})],
+        ['实际几何', json(data.window.actual_geometry || {})],
+        ['消息区域', json(data.window.message_region || [])],
+        ['会话列表宽度', esc(data.window.session_list_width || '')],
+        ['发送按钮', json(data.window.send_button || [])],
+        ['原始截图', data.debug.raw_screenshot_enabled ? info('已启用') : warn('未启用')]
       ]);
       $('vision').innerHTML = table([
-        ['model loaded', bool(data.yolo.model_loaded)],
-        ['model path', esc(data.yolo.model_path || '')],
-        ['imgsz config', esc(data.yolo.imgsz_config || '')],
-        ['imgsz actual', json(data.yolo.imgsz_actual || '')],
+        ['模型已加载', bool(data.yolo.model_loaded)],
+        ['模型路径', esc(data.yolo.model_path || '')],
+        ['imgsz 配置', esc(data.yolo.imgsz_config || '')],
+        ['imgsz 实际值', json(data.yolo.imgsz_actual || '')],
         ['stride', esc(data.yolo.stride || '')],
-        ['visual running', serviceBadge(data.services.visual)],
-        ['primed', bool(data.services.visual.primed)],
-        ['current session', esc(data.services.visual.current_session || '')],
-        ['seen visual hashes', esc(data.services.visual.seen_visual_hashes || 0)]
+        ['视觉服务', serviceBadge(data.services.visual)],
+        ['已预热', bool(data.services.visual.primed)],
+        ['当前会话', esc(data.services.visual.current_session || '')],
+        ['视觉去重数', esc(data.services.visual.seen_visual_hashes || 0)]
       ]);
     }
 
@@ -614,8 +617,14 @@
     }
 
     async function rescanDb() {
-      $('stamp').textContent = 'rescanning database...';
+      $('stamp').textContent = '正在重扫数据库...';
       await fetchJson(apiPath('/api/database/rescan'), { method: 'POST' });
+      await loadStatus();
+    }
+
+    async function resetWindow() {
+      $('stamp').textContent = '正在重置微信窗口尺寸...';
+      await fetchJson(apiPath('/api/window/reset'), { method: 'POST' });
       await loadStatus();
     }
 
@@ -632,14 +641,14 @@
     async function searchContacts() {
       const q = $('contactQuery').value.trim();
       if (!q) {
-        $('contactStatus').textContent = 'enter a search term';
+        $('contactStatus').textContent = '请输入搜索关键词';
         $('contactResults').innerHTML = '';
         return;
       }
-      $('contactStatus').textContent = 'searching...';
+      $('contactStatus').textContent = '搜索中...';
       const data = await fetchJson(`${apiPath('/api/contacts')}?q=${encodeURIComponent(q)}&limit=50`);
-      $('contactStatus').textContent = `${data.count} result(s)`;
-      $('contactResults').innerHTML = data.contacts.map(contactItem).join("") || '<span class="muted">no matches</span>';
+      $('contactStatus').textContent = `${data.count} 条结果`;
+      $('contactResults').innerHTML = data.contacts.map(contactItem).join("") || '<span class="muted">没有匹配项</span>';
     }
 
     function contactItem(c) {
@@ -649,12 +658,12 @@
             <div class="title">${esc(c.display_name)}</div>
             <div class="sub mono">${esc(c.username)}</div>
           </div>
-          ${c.is_chatroom ? info('room') : info('contact')}
+          ${c.is_chatroom ? info('群聊') : info('联系人')}
         </div>
         <div class="sub">${esc([c.remark, c.nick_name, c.alias].filter(Boolean).join(' / '))}</div>
         <div class="actions" style="margin-top:8px;">
-          <button data-fill-msg="${esc(c.username)}">Use for Messages</button>
-          <button data-fill-rpa="${esc(c.display_name)}">Use for RPA</button>
+          <button data-fill-msg="${esc(c.username)}">用于消息查询</button>
+          <button data-fill-rpa="${esc(c.display_name)}">用于 RPA</button>
         </div>
       </div>`;
     }
@@ -669,25 +678,25 @@
     async function queryMessages(media = false) {
       const contact = $('msgContact').value.trim();
       if (!contact) {
-        $('messageStatus').textContent = 'contact is required';
+        $('messageStatus').textContent = '联系人不能为空';
         return;
       }
       const limit = $('msgLimit').value || '20';
       const keyword = $('msgKeyword').value.trim();
       const params = new URLSearchParams({ contact, limit });
       if (!media && keyword) params.set('query', keyword);
-      $('messageStatus').textContent = media ? 'checking media...' : 'querying...';
+      $('messageStatus').textContent = media ? '正在检查媒体...' : '查询中...';
       const endpoint = apiPath(media ? '/api/messages/media' : '/api/messages');
       const data = await fetchJson(`${endpoint}?${params.toString()}`);
-      $('messageStatus').textContent = `${data.count} result(s) from ${data.contact.display_name}`;
-      $('messageResults').innerHTML = data.messages.map(media ? mediaMessageItem : textMessageItem).join("") || '<span class="muted">no messages</span>';
+      $('messageStatus').textContent = `${data.contact.display_name} 返回 ${data.count} 条结果`;
+      $('messageResults').innerHTML = data.messages.map(media ? mediaMessageItem : textMessageItem).join("") || '<span class="muted">没有消息</span>';
     }
 
     function textMessageItem(m) {
       return `<div class="item">
         <div class="item-head">
           <div>
-            <div class="title">${esc(m.sender_display || m.sender_username || 'unknown')}</div>
+            <div class="title">${esc(m.sender_display || m.sender_username || '未知')}</div>
             <div class="sub mono">${esc(m.time)} server=${esc(m.server_id)}</div>
           </div>
         </div>
@@ -696,10 +705,19 @@
     }
 
     function mediaMessageItem(m) {
-      const status = m.factory_ok ? info('parsed') : warn('raw');
+      const status = m.factory_ok ? info('已解析') : warn('原始');
+      const labels = {
+        path: '路径',
+        thumb_path: '缩略图',
+        file_name: '文件名',
+        file_size: '文件大小',
+        file_type: '文件类型',
+        md5: 'MD5',
+        duration: '时长'
+      };
       const media = ['path', 'thumb_path', 'file_name', 'file_size', 'file_type', 'md5', 'duration']
         .filter(k => m[k] !== undefined && m[k] !== null && m[k] !== '')
-        .map(k => `<tr><th>${esc(k)}</th><td>${esc(m[k])}</td></tr>`).join("");
+        .map(k => `<tr><th>${esc(labels[k] || k)}</th><td>${esc(m[k])}</td></tr>`).join("");
       return `<div class="item">
         <div class="item-head">
           <div>
@@ -717,17 +735,20 @@
       const target = $('rpaTarget').value.trim();
       const atUserName = $('rpaAt').value.trim();
       const content = $('rpaContent').value;
-      $('rpaStatus').textContent = 'queueing...';
+      $('rpaStatus').textContent = '执行中...';
       const data = await fetchJson(apiPath('/api/rpa/send_text'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target, content, at_user_name: atUserName })
+        body: JSON.stringify({ target, content, at_user_name: atUserName, wait_seconds: 12 })
       });
-      $('rpaStatus').textContent = `queued for ${data.target}, queue size ${data.queue_size}`;
+      $('rpaStatus').textContent = data.completed
+        ? `${data.target} 已执行完成`
+        : `${data.target} 已入队，当前队列 ${data.queue_size}`;
       await loadStatus();
     }
 
     $('refresh').addEventListener('click', () => loadStatus().catch(showHeaderError));
+    $('resetWindow').addEventListener('click', () => resetWindow().catch(showHeaderError));
     $('rescanDb').addEventListener('click', () => rescanDb().catch(showHeaderError));
     $('pauseMessages').addEventListener('click', () => pauseMessages().catch(showHeaderError));
     $('resumeMessages').addEventListener('click', () => resumeMessages().catch(showHeaderError));

@@ -146,6 +146,11 @@ class RPAController:
             time.sleep(random.uniform(0.5, 1.5))
 
         try:
+            ensure_ready = getattr(self.window_manager, "ensure_action_ready", None)
+            if callable(ensure_ready) and not ensure_ready(action):
+                self.logger.error("RPA preflight failed for %s", action.action_type.name)
+                return False
+
             self.logger.info(f"Executing RPA action: {action.action_type.name}")
             success = handler.execute(action)
             self.logger.info(f"RPA action {action.action_type.name}: {'OK' if success else 'FAILED'}")

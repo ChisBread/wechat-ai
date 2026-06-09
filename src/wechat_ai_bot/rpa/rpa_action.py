@@ -6,6 +6,7 @@ Import RPAAction and RPAActionType from here instead of action_handlers.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from queue import Queue
 from typing import Any, Dict
 
 
@@ -46,6 +47,12 @@ class RPAAction:
     action_type: RPAActionType = field(default=None, init=False)
     timestamp: datetime = field(default_factory=datetime.now, init=False)
     is_send_message: bool = field(default=None, init=False)
+    result_queue: Queue | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+        kw_only=True,
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         action_type_value = getattr(self, "action_type", None)

@@ -80,14 +80,19 @@ class DebugRoutesTest(unittest.TestCase):
         self.assertIn("/dashboard/api/contacts", paths)
         self.assertIn("/dashboard/api/messages", paths)
         self.assertIn("/dashboard/api/rpa/send_text", paths)
+        self.assertIn("/dashboard/api/window/reset", paths)
         self.assertIn("/debug", paths)
         self.assertIn("/debug/api/status", paths)
         self.assertIn("/debug/api/contacts", paths)
         self.assertIn("/debug/api/messages", paths)
         self.assertIn("/debug/api/rpa/send_text", paths)
+        self.assertIn("/debug/api/window/reset", paths)
 
     def test_dashboard_html_loads_manager_template(self):
-        self.assertIn("WeChat-AI Manager", _dashboard_html())
+        html = _dashboard_html()
+
+        self.assertIn("WeChat-AI 管理台", html)
+        self.assertIn("重置窗口尺寸", html)
 
     def test_create_app_skips_debug_routes_when_disabled(self):
         app = create_app(
