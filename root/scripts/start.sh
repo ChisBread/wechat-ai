@@ -48,8 +48,5 @@ if [ "$AUTO_START_WECHAT" = "true" ]; then
     fi
 fi
 
-# Start the AI bot
-if [ "$BOT_ENABLED" = "true" ]; then
-    echo "[wechat-ai] $(date): launching bot" | tee -a "$BOT_LOG"
-    /scripts/start-bot.sh &
-fi
+# The bot is supervised by s6 as root so SQLCipher key scanning can read
+# /proc/<wechat-pid>/mem. This desktop autostart script only owns GUI apps.

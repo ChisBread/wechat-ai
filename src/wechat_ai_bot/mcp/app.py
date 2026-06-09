@@ -14,14 +14,19 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
-from typing import Any, Callable, List, Literal, Optional, Tuple
+from datetime import datetime
+from typing import Any, Callable, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
 from wechat_ai_bot.clients.mqtt_client import MQTTClient
-from wechat_ai_bot.mcp.debug import register_debug_routes
-from wechat_ai_bot.mcp.dispatchers import MqttCommandDispatcher
+from wechat_ai_bot.mcp.debug import build_debug_status, register_debug_routes
+from wechat_ai_bot.mcp.dispatchers import (
+    MqttCommandDispatcher,
+    QueueCommandDispatcher,
+    UnavailableCommandDispatcher,
+)
 from wechat_ai_bot.mcp.protocols import CommandDispatcher
-from wechat_ai_bot.models import Contact, UserInfo
+from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.rpa.rpa_action import RPAActionType
 from wechat_ai_bot.weixin.message_classes import MessageType
 
@@ -40,9 +45,11 @@ class AppContext:
 
 def init_mqtt_client(config: dict) -> MQTTClient:
     """Initialize and connect MQTT client."""
+    if not config.get("host"):
+        raise RuntimeError("MQTT host is not configured.")
     client_id = "mcp-client"
     client = MQTTClient(
-        host=config.get("host", "127.0.0.1"),
+        host=config.get("host"),
         port=config.get("port", 1883),
         client_id=client_id,
         username=config.get("username", "weixin"),
@@ -58,13 +65,27 @@ def init_mqtt_client(config: dict) -> MQTTClient:
 
 @asynccontextmanager
 async def app_lifespan(
-    app: FastMCP, user_info: UserInfo, mqtt_config: dict
+    app: FastMCP,
+    user_info: UserInfo,
+    mqtt_config: dict,
+    bot: Any = None,
 ) -> AsyncIterator[AppContext]:
     """Manage application lifecycle."""
     logger.info("MCP app lifespan starting...")
 
-    mqtt_client = init_mqtt_client(mqtt_config)
-    dispatcher = MqttCommandDispatcher(mqtt_client, user_info)
+    mqtt_client = None
+    if bot is not None and getattr(bot, "rpa_task_queue", None) is not None:
+        dispatcher: CommandDispatcher = QueueCommandDispatcher(bot, user_info)
+        logger.info("MCP command dispatcher: local RPA queue")
+    elif mqtt_config.get("host"):
+        mqtt_client = init_mqtt_client(mqtt_config)
+        dispatcher = MqttCommandDispatcher(mqtt_client, user_info)
+        logger.info("MCP command dispatcher: MQTT")
+    else:
+        dispatcher = UnavailableCommandDispatcher(
+            "No local bot RPA queue is available and mqtt.host is empty."
+        )
+        logger.warning("MCP command dispatcher unavailable.")
 
     # MVP: empty contact/room dicts (will be populated by RPA discovery)
     app_context = AppContext(
@@ -78,8 +99,8 @@ async def app_lifespan(
         yield app_context
     finally:
         logger.warning("MCP app shutting down...")
-        if hasattr(app_context.command_dispatcher, "mqtt"):
-            app_context.command_dispatcher.mqtt.disconnect()
+        if mqtt_client is not None:
+            mqtt_client.disconnect()
         logger.info("MCP app shutdown complete.")
 
 
@@ -127,7 +148,10 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
     """Create and configure the MCP application (Linux port)."""
 
     lifespan_handler = functools.partial(
-        app_lifespan, user_info=user_info, mqtt_config=config.get("mqtt", {})
+        app_lifespan,
+        user_info=user_info,
+        mqtt_config=config.get("mqtt", {}),
+        bot=bot,
     )
     mcp_config = config.get("mcp", {})
     mcp_port = int(os.environ.get("MCP_PORT") or mcp_config.get("port", 8000))
@@ -135,9 +159,10 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         name="WeChat-AI-MCP",
         instructions="""
         You are a WeChat assistant powered by WeChat-AI Bot (Linux).
-        - Send text messages via RPA automation.
-        - Manage group chats and members.
-        - Query message history through read-only Linux WeChat SQLCipher DB access.
+        - Query contacts and message history through read-only Linux WeChat SQLCipher DB access.
+        - Send text messages via the local RPA queue. Use dry_run=true before sending.
+        - Queue only the Linux-ported group actions: public_room_announcement and leave_room.
+        - Treat status="unavailable" as a hard failure for tools that are not yet ported.
         Use exact nicknames or WeChat IDs when calling tools.
         """,
         lifespan=lifespan_handler,
@@ -154,6 +179,25 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
     def _database_service() -> Any:
         return getattr(bot, "database_service", None) if bot is not None else None
 
+    def _json(payload: Any, *, indent: Optional[int] = None) -> str:
+        return json.dumps(payload, ensure_ascii=False, indent=indent)
+
+    def _unavailable_tool(tool_name: str, detail: str) -> str:
+        return _json(
+            {
+                "status": "unavailable",
+                "tool": tool_name,
+                "message": detail,
+            }
+        )
+
+    def _database_unavailable_payload(db: Any = None) -> dict[str, Any]:
+        return {
+            "status": "unavailable",
+            "message": "Linux WeChat database service is not available.",
+            "detail": getattr(db, "last_error", "") if db else "db service missing",
+        }
+
     def _resolve_contact_name(name: str) -> Any:
         db = _database_service()
         if not db or not getattr(db, "is_available", False):
@@ -163,6 +207,116 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             return contact
         matches = db.get_contact_by_display_name(name)
         return matches[0] if matches else None
+
+    def _contact_payload(contact: Any) -> dict[str, Any]:
+        if not contact:
+            return {}
+        username = str(getattr(contact, "username", "") or "")
+        return {
+            "id": getattr(contact, "id", None),
+            "username": username,
+            "display_name": str(getattr(contact, "display_name", "") or username),
+            "remark": str(getattr(contact, "remark", "") or ""),
+            "nick_name": str(getattr(contact, "nick_name", "") or ""),
+            "alias": str(getattr(contact, "alias", "") or ""),
+            "is_chatroom": bool(getattr(contact, "is_chatroom", False)),
+            "local_type": getattr(contact, "local_type", None),
+        }
+
+    def _search_contacts(db: Any, query: str, limit: int) -> list[Any]:
+        if not db or not query:
+            return []
+        results: list[Any] = []
+        direct = db.get_contact_by_username(query)
+        if direct:
+            results.append(direct)
+        try:
+            results.extend(db.get_contact_by_display_name(query))
+        except Exception:
+            pass
+
+        needle = query.lower()
+        cache = getattr(db, "_contact_by_username", {}) or {}
+        for contact in cache.values():
+            fields = [
+                getattr(contact, "username", ""),
+                getattr(contact, "display_name", ""),
+                getattr(contact, "remark", ""),
+                getattr(contact, "nick_name", ""),
+                getattr(contact, "alias", ""),
+            ]
+            if any(needle in str(value).lower() for value in fields if value):
+                results.append(contact)
+
+        deduped: list[Any] = []
+        seen: set[str] = set()
+        for contact in results:
+            username = str(getattr(contact, "username", "") or "")
+            if not username or username in seen:
+                continue
+            seen.add(username)
+            deduped.append(contact)
+            if len(deduped) >= limit:
+                break
+        return deduped
+
+    def _message_type_name(local_type: Any) -> str:
+        try:
+            return MessageType.name(local_type)
+        except Exception:
+            return str(local_type or "")
+
+    def _format_timestamp(value: Any) -> str:
+        try:
+            timestamp = int(value or 0)
+        except (TypeError, ValueError):
+            return ""
+        if timestamp <= 0:
+            return ""
+        if timestamp > 10_000_000_000:
+            timestamp = timestamp // 1000
+        try:
+            return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return ""
+
+    def _truncate_text(text: str, limit: int) -> str:
+        if len(text) <= limit:
+            return text
+        return text[: max(0, limit - 3)] + "..."
+
+    def _message_payload(db: Any, row: tuple, *, include_text: bool = True) -> dict[str, Any]:
+        local_type = row[2] if len(row) > 2 else None
+        sender = None
+        sender_id = row[4] if len(row) > 4 else None
+        try:
+            sender = db.get_contact_by_sender_id(sender_id, row[17] if len(row) > 17 else None)
+        except Exception:
+            sender = None
+        payload: dict[str, Any] = {
+            "local_id": row[0] if len(row) > 0 else None,
+            "server_id": str(row[1] if len(row) > 1 else ""),
+            "type": local_type,
+            "type_name": _message_type_name(local_type),
+            "sort_seq": row[3] if len(row) > 3 else None,
+            "sender_username": getattr(sender, "username", "") if sender else "",
+            "sender_display": getattr(sender, "display_name", "") if sender else "",
+            "create_time": row[5] if len(row) > 5 else None,
+            "time": _format_timestamp(row[5] if len(row) > 5 else None),
+        }
+        if include_text and local_type in (MessageType.Text, MessageType.Text2):
+            payload["text"] = _truncate_text(str(row[12] if len(row) > 12 else ""), 4000)
+        return payload
+
+    def _chat_line(message: dict[str, Any]) -> str:
+        sender = message.get("sender_display") or message.get("sender_username") or "unknown"
+        when = message.get("time") or str(message.get("create_time") or "")
+        text = message.get("text")
+        if text:
+            body = str(text).replace("\n", " ").strip()
+        else:
+            body = f"[{message.get('type_name') or message.get('type') or 'message'}]"
+        return f"{when} {sender}: {body}".strip()
 
     @mcp.tool()
     @handle_tool_exceptions
@@ -184,6 +338,180 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         user_info_dict["raw_keys"] = {}
         user_info_dict["db_keys"] = {}
         return json.dumps(user_info_dict, ensure_ascii=False, indent=4)
+
+    @mcp.tool()
+    @handle_tool_exceptions
+    def get_runtime_status(ctx: Context) -> str:
+        """
+        Get bot, RPA, database, queue, YOLO, and dashboard status without chat content.
+        """
+        if bot is None:
+            app_context = _get_app_context_from_request(ctx)
+            return _json(
+                {
+                    "status": "limited",
+                    "message": "MCP server is running without a bot instance.",
+                    "dispatcher": type(app_context.command_dispatcher).__name__,
+                }
+            )
+        status = build_debug_status(bot, config, show_sensitive=False)
+        status["mcp"] = {
+            "endpoint_container": "http://localhost:8000/mcp",
+            "endpoint_host_default": "http://localhost:8100/mcp",
+            "dashboard_host_default": "http://localhost:8100/dashboard",
+        }
+        try:
+            app_context = _get_app_context_from_request(ctx)
+            status["mcp"]["dispatcher"] = type(app_context.command_dispatcher).__name__
+        except Exception:
+            pass
+        return _json(status)
+
+    @mcp.tool()
+    @handle_tool_exceptions
+    def search_contacts(
+        ctx: Context,
+        query: str,
+        limit: Optional[int] = 20,
+        include_chatrooms: bool = True,
+        include_contacts: bool = True,
+    ) -> str:
+        """
+        Search contacts and chatrooms by WeChat ID, display name, remark, nickname, or alias.
+        """
+        db = _database_service()
+        if not db or not getattr(db, "is_available", False):
+            return _json(_database_unavailable_payload(db))
+        query = str(query or "").strip()
+        if not query:
+            return _json({"status": "invalid_request", "message": "query is required"})
+        bounded_limit = max(1, min(int(limit or 20), 100))
+        contacts = []
+        for contact in _search_contacts(db, query, bounded_limit):
+            is_chatroom = bool(getattr(contact, "is_chatroom", False))
+            if is_chatroom and not include_chatrooms:
+                continue
+            if not is_chatroom and not include_contacts:
+                continue
+            contacts.append(contact)
+            if len(contacts) >= bounded_limit:
+                break
+        return _json(
+            {
+                "status": "ok",
+                "query": query,
+                "count": len(contacts),
+                "contacts": [_contact_payload(contact) for contact in contacts],
+            }
+        )
+
+    @mcp.tool()
+    @handle_tool_exceptions
+    def get_recent_chats(ctx: Context, limit: Optional[int] = 20) -> str:
+        """
+        List chats that have message tables, ordered by the latest known message time.
+        """
+        db = _database_service()
+        if not db or not getattr(db, "is_available", False):
+            return _json(_database_unavailable_payload(db))
+        bounded_limit = max(1, min(int(limit or 20), 100))
+        username_map = getattr(db, "_message_username_map", {}) or {}
+        chats: list[dict[str, Any]] = []
+        for username in username_map.keys():
+            try:
+                rows = db.get_messages_by_username(username, count=1)
+            except Exception:
+                continue
+            if not rows:
+                continue
+            contact = db.get_contact_by_username(username)
+            row = rows[0]
+            chats.append(
+                {
+                    "contact": _contact_payload(contact) if contact else {"username": username},
+                    "last_message": _message_payload(db, row, include_text=True),
+                }
+            )
+        chats.sort(
+            key=lambda item: item.get("last_message", {}).get("create_time") or 0,
+            reverse=True,
+        )
+        return _json({"status": "ok", "count": len(chats[:bounded_limit]), "chats": chats[:bounded_limit]})
+
+    @mcp.tool()
+    @handle_tool_exceptions
+    def get_recent_messages(
+        ctx: Context,
+        contact_name: str,
+        limit: Optional[int] = 30,
+        include_non_text: bool = True,
+    ) -> str:
+        """
+        Get recent messages for a contact/chatroom. Text is included; media is summarized by type.
+        """
+        db = _database_service()
+        if not db or not getattr(db, "is_available", False):
+            return _json(_database_unavailable_payload(db))
+        contact = _resolve_contact_name(contact_name)
+        if not contact:
+            return _json(
+                {
+                    "status": "not_found",
+                    "message": f"未找到联系人或群聊: {contact_name}",
+                }
+            )
+        bounded_limit = max(1, min(int(limit or 30), 200))
+        rows = db.get_messages_by_username(contact.username, count=bounded_limit)
+        rows.reverse()
+        messages = [_message_payload(db, row, include_text=True) for row in rows]
+        if not include_non_text:
+            messages = [
+                message
+                for message in messages
+                if message.get("type") in (MessageType.Text, MessageType.Text2)
+            ]
+        return _json(
+            {
+                "status": "ok",
+                "contact": _contact_payload(contact),
+                "count": len(messages),
+                "messages": messages,
+            }
+        )
+
+    @mcp.tool()
+    @handle_tool_exceptions
+    def get_chat_summary_context(
+        ctx: Context,
+        contact_name: str,
+        limit: Optional[int] = 40,
+    ) -> str:
+        """
+        Return compact chronological chat lines suitable for LLM context windows.
+        """
+        db = _database_service()
+        if not db or not getattr(db, "is_available", False):
+            return _json(_database_unavailable_payload(db))
+        contact = _resolve_contact_name(contact_name)
+        if not contact:
+            return _json(
+                {
+                    "status": "not_found",
+                    "message": f"未找到联系人或群聊: {contact_name}",
+                }
+            )
+        bounded_limit = max(1, min(int(limit or 40), 120))
+        rows = db.get_messages_by_username(contact.username, count=bounded_limit)
+        rows.reverse()
+        messages = [_message_payload(db, row, include_text=True) for row in rows]
+        return _json(
+            {
+                "status": "ok",
+                "contact": _contact_payload(contact),
+                "count": len(messages),
+                "context": "\n".join(_chat_line(message) for message in messages),
+            }
+        )
 
     @mcp.tool()
     @handle_tool_exceptions
@@ -252,10 +580,11 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         recipient_name: str,
         message: str,
         at_user_name: Optional[str] = None,
+        dry_run: bool = False,
     ) -> str:
         """
         Send a text message to a user or group via RPA.
-        Supports @mention in groups.
+        Supports @mention in groups. Set dry_run=true to resolve the target without sending.
         """
         app_context = _get_app_context_from_request(ctx)
 
@@ -281,78 +610,43 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             "is_chatroom": is_chatroom,
             "create_time": int(time.time()),
         }
+        response = {
+            "status": "dry_run" if dry_run else "queued",
+            "recipient_name": recipient_name,
+            "resolved": {
+                "username": username,
+                "display_name": nickname,
+                "is_chatroom": is_chatroom,
+                "contact": _contact_payload(recipient) if recipient else None,
+            },
+            "message_preview": message[:200],
+            "at_user_name": at_user_name,
+        }
+        if dry_run:
+            return _json(response)
         app_context.command_dispatcher.dispatch(topic, payload)
-        return f"Message submitted to '{recipient_name}'."
+        response["dispatcher"] = type(app_context.command_dispatcher).__name__
+        return _json(response)
 
     @mcp.tool()
     @handle_tool_exceptions
     def send_file_msg(ctx: Context, recipient_name: str, file_path: str) -> str:
-        """Send a file to a user or group via RPA."""
-        app_context = _get_app_context_from_request(ctx)
-
-        recipient = _resolve_contact_name(recipient_name)
-        if recipient:
-            username = recipient.username
-            nickname = recipient.display_name
-            is_chatroom = recipient.username.endswith("@chatroom")
-        else:
-            is_chatroom = "群" in recipient_name
-            username = hashlib.md5(recipient_name.encode()).hexdigest()
-            if is_chatroom:
-                username += "@chatroom"
-            nickname = recipient_name
-
-        topic = f"msg/{app_context.userinfo.account}/rpa_action"
-        payload = {
-            "local_type": MessageType.File,
-            "message_content": "",
-            "username": username,
-            "nickname": nickname,
-            "file": file_path,
-            "is_chatroom": is_chatroom,
-            "create_time": int(time.time()),
-        }
-        app_context.command_dispatcher.dispatch(topic, payload)
-        return f"File send task submitted to '{recipient_name}'."
+        """Report that Linux RPA file sending is not available yet."""
+        return _unavailable_tool(
+            "send_file_msg",
+            "Linux SendFileAction has not been ported yet. Database media read paths are available through dashboard and message tools.",
+        )
 
     @mcp.tool()
     @handle_tool_exceptions
     def send_pat_msg(
         ctx: Context, user_name: str, room_name: Optional[str] = None
     ) -> str:
-        """Send a 'pat' (拍一拍) message."""
-        app_context = _get_app_context_from_request(ctx)
-
-        if room_name:
-            room = _resolve_contact_name(room_name)
-            target = room.display_name if room else room_name
-            is_chatroom = True
-        else:
-            target_contact = _resolve_contact_name(user_name)
-            target = target_contact.display_name if target_contact else user_name
-            is_chatroom = bool(target_contact and target_contact.username.endswith("@chatroom"))
-
-        recipient = _resolve_contact_name(target)
-        if recipient:
-            username = recipient.username
-            is_chatroom = recipient.username.endswith("@chatroom")
-        else:
-            username = hashlib.md5(target.encode()).hexdigest()
-            if is_chatroom:
-                username += "@chatroom"
-
-        topic = f"msg/{app_context.userinfo.account}/rpa_action"
-        payload = {
-            "local_type": MessageType.Pat,
-            "message_content": "",
-            "username": username,
-            "nickname": target,
-            "at_list": [user_name],
-            "is_chatroom": is_chatroom,
-            "create_time": int(time.time()),
-        }
-        app_context.command_dispatcher.dispatch(topic, payload)
-        return f"Pat message submitted to '{user_name}'."
+        """Report that Linux RPA 'pat' (拍一拍) is not available yet."""
+        return _unavailable_tool(
+            "send_pat_msg",
+            "Linux PatAction has not been ported yet.",
+        )
 
     @mcp.tool()
     @handle_tool_exceptions
@@ -407,41 +701,37 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
     @mcp.tool()
     @handle_tool_exceptions
     def remove_room_member(ctx: Context, room_name: str, member_name: str) -> str:
-        """Remove a member from a group chat."""
-        app_context = _get_app_context_from_request(ctx)
-        return app_context.command_dispatcher.dispatch_rpa(
-            RPAActionType.REMOVE_ROOM_MEMBER.value,
-            {"target": room_name, "user_name": member_name},
+        """Report that Linux RPA member removal is not available yet."""
+        return _unavailable_tool(
+            "remove_room_member",
+            "Linux RemoveRoomMemberAction has not been ported yet.",
         )
 
     @mcp.tool()
     @handle_tool_exceptions
     def invite_room_member(ctx: Context, room_name: str, user_name: str) -> str:
-        """Invite a user to a group chat."""
-        app_context = _get_app_context_from_request(ctx)
-        return app_context.command_dispatcher.dispatch_rpa(
-            RPAActionType.INVITE_2_ROOM.value,
-            {"target": room_name, "user_name": user_name},
+        """Report that Linux RPA room invitation is not available yet."""
+        return _unavailable_tool(
+            "invite_room_member",
+            "Linux Invite2RoomAction has not been ported yet.",
         )
 
     @mcp.tool()
     @handle_tool_exceptions
     def rename_room_name(ctx: Context, room_name: str, new_name: str) -> str:
-        """Rename a group chat."""
-        app_context = _get_app_context_from_request(ctx)
-        return app_context.command_dispatcher.dispatch_rpa(
-            RPAActionType.RENAME_ROOM_NAME.value,
-            {"target": room_name, "name": new_name},
+        """Report that Linux RPA room rename is not available yet."""
+        return _unavailable_tool(
+            "rename_room_name",
+            "Linux RenameRoomNameAction has not been ported yet.",
         )
 
     @mcp.tool()
     @handle_tool_exceptions
     def rename_name_in_room(ctx: Context, room_name: str, new_name_in_room: str) -> str:
-        """Change your nickname in a group chat."""
-        app_context = _get_app_context_from_request(ctx)
-        return app_context.command_dispatcher.dispatch_rpa(
-            RPAActionType.RENAME_NAME_IN_ROOM.value,
-            {"target": room_name, "name": new_name_in_room},
+        """Report that Linux RPA in-room nickname rename is not available yet."""
+        return _unavailable_tool(
+            "rename_name_in_room",
+            "Linux RenameNameInRoomAction has not been ported yet.",
         )
 
     return mcp

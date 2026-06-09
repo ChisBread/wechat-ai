@@ -45,6 +45,7 @@ class XFCEWindowManager:
         self.SIDE_BAR_WIDTH = self.SESSION_LIST_WIDTH = self.TITLE_BAR_HEIGHT = 0
         self.target_window_size = (self.size_config.width, self.size_config.height)
         self.actual_window_geometry = {}
+        self.last_window_state = "not_initialized"
 
         self.ICON_CONFIGS = {
             "send_button": {"name": "send", "color": "red", "position": None},
@@ -140,10 +141,15 @@ class XFCEWindowManager:
     def _enter_wechat_if_needed(self, wid: str) -> bool:
         geom = self._window_geometry(wid)
         if not geom:
+            self.last_window_state = "window_geometry_unavailable"
             return False
         if self._is_main_wechat_window(geom):
+            self.last_window_state = "main_window"
+            self.actual_window_geometry = geom
             return True
 
+        self.last_window_state = "waiting_mobile_confirmation"
+        self.actual_window_geometry = geom
         self.logger.info(
             "Detected small WeChat window %s at %s,%s %sx%s",
             wid,
@@ -200,9 +206,20 @@ class XFCEWindowManager:
         return None
 
     def _target_window_size(self) -> tuple[int, int]:
+        self.size_config = suggest_size(self.rpa_config)
         display_w, display_h = self._display_size()
-        target_w = min(self.size_config.width, display_w)
-        target_h = min(self.size_config.height, display_h)
+        if display_w < self.size_config.width or display_h < self.size_config.height:
+            self.last_window_state = "display_too_small"
+            self.logger.warning(
+                "Display %sx%s is smaller than target WeChat window %sx%s; waiting for Selkies display resize",
+                display_w,
+                display_h,
+                self.size_config.width,
+                self.size_config.height,
+            )
+            return 0, 0
+        target_w = self.size_config.width
+        target_h = self.size_config.height
         if target_w != self.size_config.width or target_h != self.size_config.height:
             self.logger.warning(
                 "Adjusted target window size from %sx%s to %sx%s for display %sx%s",
@@ -217,6 +234,44 @@ class XFCEWindowManager:
             self.size_config.height = target_h
         self.target_window_size = (target_w, target_h)
         return target_w, target_h
+
+    def _normalize_dpi(self) -> None:
+        """Keep the WeChat/RPA window in physical pixels instead of Selkies HiDPI."""
+        try:
+            Path("/config/.Xresources").write_text("Xft.dpi: 96\n", encoding="utf-8")
+            _run("xrdb", "/config/.Xresources")
+        except Exception as exc:
+            self.logger.debug("Failed to normalize Xft.dpi: %s", exc)
+
+    def _resize_wechat_window(self, wid: str, target_w: int, target_h: int) -> Optional[dict]:
+        """Move and resize WeChat, waiting for the WM to report the requested size."""
+        tolerance = int(self.rpa_config.get("window", {}).get("size_tolerance", 8))
+        for attempt in range(1, 4):
+            _run("xdotool", "windowactivate", wid)
+            time.sleep(self.action_delay)
+            _run("xdotool", "windowmove", "--sync", wid, "0", "0")
+            _run("xdotool", "windowsize", "--sync", wid, str(target_w), str(target_h))
+            time.sleep(max(self.action_delay, 0.5))
+            geom = self._window_geometry(wid)
+            if not geom:
+                continue
+            width_ok = abs(geom["width"] - target_w) <= tolerance
+            height_ok = abs(geom["height"] - target_h) <= tolerance
+            x_ok = abs(geom["x"]) <= tolerance
+            y_ok = abs(geom["y"]) <= tolerance
+            if width_ok and height_ok and x_ok and y_ok:
+                return geom
+            self.logger.warning(
+                "WeChat resize attempt %s did not reach target %sx%s: got x=%s y=%s %sx%s",
+                attempt,
+                target_w,
+                target_h,
+                geom["x"],
+                geom["y"],
+                geom["width"],
+                geom["height"],
+            )
+        return self._window_geometry(wid)
 
     def _find_vertical_boundary(
         self,
@@ -325,7 +380,7 @@ class XFCEWindowManager:
     def init_chat_window(self) -> bool:
         self.logger.info("Initializing chat window (Openbox/X11)...")
         try:
-            if not subprocess.run(["pgrep", "-f", "wechat"], capture_output=True).stdout.strip():
+            if not subprocess.run(["pgrep", "-x", "wechat"], capture_output=True).stdout.strip():
                 self.logger.error("WeChat not running"); return False
 
             wid = self._find_wechat_window()
@@ -333,26 +388,47 @@ class XFCEWindowManager:
             if not self._enter_wechat_if_needed(wid):
                 wid = self._find_wechat_window()
                 if not wid:
+                    self.last_window_state = "window_not_found"
                     self.logger.error("WeChat main window not found after entry click")
                     return False
                 geom = self._window_geometry(wid)
                 if not geom or not self._is_main_wechat_window(geom):
+                    self.last_window_state = "waiting_mobile_confirmation"
+                    if geom:
+                        self.actual_window_geometry = geom
                     self.logger.warning("WeChat main window is not ready yet")
                     return False
 
+            self._normalize_dpi()
             w, h = self._target_window_size()
-            _run("xdotool", "windowactivate", wid)
-            time.sleep(self.action_delay)
-            _run("xdotool", "windowmove", wid, "0", "0")
-            _run("xdotool", "windowsize", wid, str(w), str(h))
+            if w <= 0 or h <= 0:
+                return False
+            geom = self._resize_wechat_window(wid, w, h)
             time.sleep(self.window_show_delay)
-            geom = self._window_geometry(wid)
             if geom:
                 self.actual_window_geometry = geom
-                self.size_config.width = geom["width"]
-                self.size_config.height = geom["height"]
-                w, h = geom["width"], geom["height"]
-                self.logger.info("WeChat geometry: x=%s y=%s %sx%s", geom["x"], geom["y"], w, h)
+                self.logger.info(
+                    "WeChat geometry: x=%s y=%s %sx%s target=%sx%s",
+                    geom["x"],
+                    geom["y"],
+                    geom["width"],
+                    geom["height"],
+                    w,
+                    h,
+                )
+                tolerance = int(self.rpa_config.get("window", {}).get("size_tolerance", 8))
+                if (
+                    abs(geom["width"] - w) > tolerance
+                    or abs(geom["height"] - h) > tolerance
+                    or abs(geom["x"]) > tolerance
+                    or abs(geom["y"]) > tolerance
+                ):
+                    self.last_window_state = "resize_mismatch"
+                    self.logger.warning("WeChat window is not aligned to target geometry")
+                    return False
+                self.size_config.width = w
+                self.size_config.height = h
+                self.last_window_state = "aligned"
             else:
                 self.logger.warning("Using target geometry without window manager confirmation")
 
@@ -364,6 +440,7 @@ class XFCEWindowManager:
                     "region": [0, 0, w, h],
                 }
                 self.current_window = self.weixin_windows["WeChat"]
+                self.last_window_state = "ready"
                 return True
             return False
         except Exception as e:

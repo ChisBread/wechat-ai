@@ -120,7 +120,7 @@ class WaylandWindowManager:
         """Check if WeChat process is running."""
         try:
             result = subprocess.run(
-                ["pgrep", "-f", "wechat"], capture_output=True, text=True
+                ["pgrep", "-x", "wechat"], capture_output=True, text=True
             )
             return result.returncode == 0 and bool(result.stdout.strip())
         except Exception:

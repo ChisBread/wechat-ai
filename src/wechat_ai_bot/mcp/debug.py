@@ -641,7 +641,7 @@ def _database_discovery_status(root: str) -> dict[str, Any]:
 
 def _process_status() -> dict[str, Any]:
     return {
-        "wechat": _pgrep("wechat"),
+        "wechat": _pgrep_exact("wechat"),
         "bot": _pgrep("wechat_ai_bot.bot"),
         "display": _command(["xdotool", "getdisplaygeometry"], timeout=1.5),
     }
@@ -652,6 +652,7 @@ def _window_status(window_manager: Any) -> dict[str, Any]:
         return {}
     return {
         "current_window": bool(getattr(window_manager, "current_window", None)),
+        "state": getattr(window_manager, "last_window_state", ""),
         "message_region": _safe_call(window_manager, "get_message_region"),
         "target_size": getattr(window_manager, "target_window_size", None),
         "actual_geometry": getattr(window_manager, "actual_window_geometry", {}),
@@ -753,6 +754,12 @@ def _safe_call(obj: Any, method_name: str) -> Any:
 
 def _pgrep(pattern: str) -> dict[str, Any]:
     result = _command(["pgrep", "-f", pattern], timeout=1.5)
+    pids = [line.strip() for line in result.get("stdout", "").splitlines() if line.strip()]
+    return {"running": bool(pids), "pids": pids[:10]}
+
+
+def _pgrep_exact(name: str) -> dict[str, Any]:
+    result = _command(["pgrep", "-x", name], timeout=1.5)
     pids = [line.strip() for line in result.get("stdout", "").splitlines() if line.strip()]
     return {"running": bool(pids), "pids": pids[:10]}
 

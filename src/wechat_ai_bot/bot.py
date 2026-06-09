@@ -49,6 +49,7 @@ class Bot:
         self.chat_window_ready = False
         self.started_at = time.time()
         self._window_init_thread = None
+        self._database_recovery_thread = None
         self._components: List[Any] = []
 
         # ---- RPA Components ----
@@ -86,6 +87,8 @@ class Bot:
 
         # ---- Services ----
         database_config = self.config.get("database", {})
+        if not isinstance(database_config, dict):
+            database_config = {}
         self.database_service = None
         if database_config.get("enabled", True):
             self.database_service = LinuxDatabaseService(
@@ -129,6 +132,8 @@ class Bot:
             )
 
         visual_config = self.config.get("visual_message", {})
+        if not isinstance(visual_config, dict):
+            visual_config = {}
         self.visual_message_service = VisualMessageService(
             window_manager=self.window_manager,
             image_processor=self.image_processor,
@@ -207,6 +212,7 @@ class Bot:
 
         self.is_running = True
         self._start_window_init_loop()
+        self._start_database_recovery_loop()
 
         for component in self._components:
             name = component.__class__.__name__
@@ -260,6 +266,48 @@ class Bot:
             except Exception as e:
                 self.logger.error(f"  {name}: setup failed: {e}")
 
+    def _start_database_recovery_loop(self):
+        if not self.database_service or getattr(self.database_service, "is_available", False):
+            return
+        self._database_recovery_thread = threading.Thread(
+            target=self._database_recovery_loop,
+            daemon=True,
+            name="DatabaseRecoveryLoop",
+        )
+        self._database_recovery_thread.start()
+
+    def _database_recovery_loop(self):
+        interval = float(getattr(self.database_service, "key_retry_interval", 10.0) or 10.0)
+        while self.is_running and self.database_service and not getattr(self.database_service, "is_available", False):
+            time.sleep(max(2.0, interval))
+            if not self.is_running:
+                return
+            try:
+                status = self.database_service.refresh()
+            except Exception as exc:
+                self.logger.warning("Database refresh retry failed: %s", exc)
+                continue
+            if not status.get("available"):
+                self.logger.info(
+                    "Database still unavailable after retry: %s",
+                    status.get("last_error", "unknown"),
+                )
+                continue
+            self.logger.info(
+                "Database recovered: contacts=%s message_tables=%s keys=%s",
+                status.get("contacts"),
+                status.get("message_tables"),
+                status.get("key_count"),
+            )
+            if self.message_service and not getattr(self.message_service, "is_running", False):
+                self.message_service.start()
+            if getattr(self.visual_message_service, "is_running", False) and not bool(
+                self.config.get("visual_message.enabled", False)
+            ):
+                self.visual_message_service.stop()
+                self.logger.info("Visual fallback stopped after database recovery")
+            return
+
     def _start_window_init_loop(self):
         self._window_init_thread = threading.Thread(
             target=self._window_init_loop,
@@ -306,6 +354,8 @@ class Bot:
         self.is_running = False
         if self._window_init_thread and self._window_init_thread.is_alive():
             self._window_init_thread.join(timeout=5)
+        if self._database_recovery_thread and self._database_recovery_thread.is_alive():
+            self._database_recovery_thread.join(timeout=5)
 
         for component in reversed(self._components):
             name = component.__class__.__name__

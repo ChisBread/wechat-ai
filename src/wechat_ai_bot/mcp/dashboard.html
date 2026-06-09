@@ -580,6 +580,7 @@
     function renderWindow(data) {
       $('windowState').innerHTML = table([
         ['current window', bool(data.window.current_window)],
+        ['state', esc(data.window.state || '')],
         ['target size', json(data.window.target_size || {})],
         ['actual geometry', json(data.window.actual_geometry || {})],
         ['message region', json(data.window.message_region || [])],

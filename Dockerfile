@@ -60,7 +60,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     rm /tmp/requirements.txt
 
 COPY pyproject.toml /app/
+COPY README.md README.en.md LICENSE CREDITS.md /app/
+COPY docs/ /app/docs/
 COPY src/ /app/src/
+COPY tests/ /app/tests/
 COPY config.example.yaml /app/config.example.yaml
 RUN --mount=type=cache,target=/root/.cache/pip \
     cd /app && /opt/venv-bot/bin/pip install --no-deps -e .
@@ -75,6 +78,8 @@ ENV AUTO_START_WECHAT="true"
 ENV BOT_ENABLED="true"
 ENV BOT_CONFIG_PATH="/config/config.yaml"
 ENV MCP_PORT="8000"
+ENV SELKIES_MANUAL_WIDTH="1920"
+ENV SELKIES_MANUAL_HEIGHT="1916"
 ENV QT_AUTO_SCREEN_SCALE_FACTOR="0"
 ENV QT_SCALE_FACTOR="1"
 ENV QT_FONT_DPI="96"
@@ -85,7 +90,7 @@ RUN if [ -f /usr/share/icons/hicolor/128x128/apps/wechat.png ]; then \
     fi
 
 COPY /root /
-RUN chmod +x /scripts/*.sh 2>/dev/null || true
+RUN chmod +x /scripts/*.sh /etc/s6-overlay/s6-rc.d/svc-wechat-ai/run 2>/dev/null || true
 
 RUN apt-get autoclean && \
     rm -rf /var/lib/apt/lists/* /var/tmp/* /tmp/*

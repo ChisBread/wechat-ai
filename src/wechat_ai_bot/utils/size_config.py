@@ -12,6 +12,9 @@ IMAGE_FACTOR = 28
 MIN_PIXELS = 4 * 28 * 28
 MAX_PIXELS = 16384 * 28 * 28
 MAX_RATIO = 200
+DEFAULT_WINDOW_WIDTH = 1008
+DEFAULT_MIN_HEIGHT = 812
+DEFAULT_MAX_HEIGHT = 2000
 
 
 @dataclass
@@ -149,10 +152,10 @@ def suggest_size(config: dict | None = None) -> SizeConfig:
     config = config or {}
     screen_size = pyautogui.size()
     window_config = config.get("window", {}) if isinstance(config, dict) else {}
-    width = int(window_config.get("width") or min(screen_size.width // 2, 1008))
+    width = int(window_config.get("width") or DEFAULT_WINDOW_WIDTH)
     height = int(window_config.get("height") or screen_size.height - 80)
-    min_height = int(window_config.get("min_height") or 812)
-    max_height = int(window_config.get("max_height") or 2000)
+    min_height = int(window_config.get("min_height") or DEFAULT_MIN_HEIGHT)
+    max_height = int(window_config.get("max_height") or DEFAULT_MAX_HEIGHT)
     align_factor = int(window_config.get("align_factor") or IMAGE_FACTOR)
 
     width = max(align_factor, min(width, screen_size.width))

@@ -1,207 +1,226 @@
 # WeChat-AI
 
-Docker 容器化 Linux 微信 + AI Bot，基于 Selkies WebRTC 浏览器访问，集成 omni-bot-sdk 插件系统和 MCP Server。
+> Docker 化的 Linux 微信自动化运行时：Selkies 远程桌面、SQLCipher 数据库读取、视觉 RPA、插件系统和面向 AI Agent 的 MCP Server。
 
-## 项目简介
+WeChat-AI 适合自托管场景：你已经在容器里的 Linux 微信登录账号，希望 AI 能安全地读取最近聊天、解析联系人，并在确认后执行少量可控的微信 RPA 操作。
 
-在 Docker 容器中同时运行：
-- **Linux 微信客户端**（通过 Selkies WebRTC 在浏览器中远程使用）
-- **AI 机器人**（OCR+YOLO 视觉识别 + 插件系统 + MCP Server）
+[English README](README.en.md)
 
-适用于服务器部署、远程办公、微信自动回复等场景。
+## 你能用它做什么
+
+- **远程使用 Linux 微信**：通过 Selkies WebRTC 在浏览器里访问容器桌面。
+- **内部管理面板**：查看 bot、RPA、数据库、窗口、YOLO、队列、插件和日志状态。
+- **读取微信数据库**：使用 Python 版 `sqlcipher3-binary` 打开 Linux 微信 4.x SQLCipher 数据库，读取文本、图片、视频、文件等消息元数据。
+- **视觉 RPA**：通过 X11/pyautogui 操作微信窗口，并对窗口尺寸和 YOLO 输入尺寸做对齐，降低分辨率漂移带来的误识别。
+- **MCP 接入 AI 客户端**：提供 Streamable HTTP MCP endpoint，可接 Claude Code、OpenClaw 以及其他 MCP 客户端。
+- **插件机制**：保留从上游 bot 迁移来的 `wechat_ai.plugins` entry point 插件模型。
 
 ## 快速开始
 
-### 环境要求
-
-- Docker & Docker Compose
-- 支持 WebRTC 的浏览器（Chrome/Firefox/Safari）
-- （可选）GPU 硬件加速：`/dev/dri` 设备
-
-### 部署
+### 1. 启动容器
 
 ```bash
-# 1. 进入项目目录
-cd wechat-ai
-
-# 2. （可选）复制并修改配置
-cp .env.example .env
-
-# 3. 构建并启动
 docker compose up -d --build
-
-# 4. 访问微信
-# 浏览器打开: https://localhost:3001
 ```
 
-### 配置
+默认宿主机端口：
 
-```bash
-# 编辑 bot 配置
-vim config/config.yaml
+| 服务 | 地址 |
+| --- | --- |
+| 微信远程桌面 | `https://localhost:3101` |
+| 管理面板 | `http://localhost:8100/dashboard` |
+| MCP Streamable HTTP | `http://localhost:8100/mcp` |
 
-# 主要配置项:
-# - wechat_user: 微信用户信息
-# - mcp.port: MCP Server 端口 (默认 8000)
-# - mqtt: MQTT 消息转发 (可选)
-# - plugins: 插件启用/禁用
-# - openai: LLM API 配置
-# - rpa: RPA 操作参数
-# - visual_message: 视觉消息读取参数
+容器内 MCP 监听 `8000`，compose 默认映射到宿主机 `8100`。如果复制 `.env.example` 到 `.env`，默认值仍保持一致。
+
+### 2. 登录微信
+
+打开 `https://localhost:3101`，登录 Linux 微信，并保持会话在线。微信数据目录通常在：
+
+```text
+/config/xwechat_files/<account>_<suffix>/
 ```
 
-### 环境变量
+### 3. 检查运行状态
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `HTTP_PORT` | 3000 | HTTP 访问端口 |
-| `HTTPS_PORT` | 3001 | HTTPS 访问端口 |
-| `MCP_PORT` | 8000 | MCP Server 端口 |
-| `AUTO_START_WECHAT` | true | 自动启动微信 |
-| `BOT_ENABLED` | true | 启动 AI Bot |
-| `CUSTOM_USER` | - | Selkies Web UI 用户名 |
-| `PASSWORD` | - | Selkies Web UI 密码 |
-| `SHM_SIZE` | 2gb | 共享内存大小 |
+打开：
 
-## 架构
-
-```
-Container: wechat-ai
-+----------------------------------------------------+
-|  Selkies WebRTC (ports 3000/3001)                  |
-|  +-----------+  +-----------+  +----------------+  |
-|  | Openbox WM|  | WeChat    |  | stalonetray    |  |
-|  | (X11)     |  | (Linux)   |  +----------------+  |
-|  +-----------+  +-----------+                      |
-+----------------------------------------------------+
-|  AI Bot Process (Python 3.12)                      |
-|  +---------------+  +----------+  +------------+   |
-|  | PluginManager |  | MCP Svr  |  | MQTT Client|   |
-|  +-------+-------+  +----+-----+  +-----+------+   |
-|          |                |              |          |
-|  +-------v----------------v--------------v------+   |
-|  |         ProcessorService                    |   |
-|  +----+-----------------------------+---------+   |
-|       |                             |              |
-|  +----v------+              +-------v--------+     |
-|  | Linux RPA |              | Visual Message |     |
-|  | Layer     |              | Reader (OCR)   |     |
-|  | (X11/pyau-|              | - Screenshot   |     |
-|  | togui/mss)|              |   chat area    |     |
-|  +-----------+              | - YOLO + OCR   |     |
-|                              +----------------+     |
-+----------------------------------------------------+
-```
-
-## Linux 微信数据库
-
-实时消息读取优先走 Linux 微信数据库，视觉读取作为兜底。Linux 微信 4.x 的数据位于
-`/config/xwechat_files/<account>_<suffix>/db_storage/`，按
-`message/contact/session/hardlink/...` 分库；业务 `.db` 是 SQLCipher 库，标准库
-`sqlite3` 不能直接打开。
-
-项目使用 Python 驱动 `sqlcipher3-binary`，不依赖系统 `sqlcipher` CLI。启动时
-`LinuxDatabaseService` 会只读发现账号目录，扫描 WeChat 进程内存中的 SQLCipher raw
-key，并用每个 DB 首页 HMAC 验证；key 只保存在 bot 进程内存，不落盘。DB 成功后，
-`MessageService` 会轮询 `Msg_*` 表的新 `local_id`，并把文本、图片、视频等消息按
-example 的 tuple 形态送入现有 message factory。图片/视频路径通过
-`hardlink/hardlink.db` 和 `msg/attach`、`msg/video` 目录解析。
-
-默认 `start-bot.sh` 以 root 启动 bot，是为了读取 `/proc/<wechat-pid>/mem`；WeChat 和
-X11/Selkies 仍按 `abc` 会话运行。若设置 `BOT_RUN_USER=abc`，数据库 key 扫描通常会被
-内核权限拒绝，bot 会退回视觉读取。
-
-## 技术栈
-
-- **基础镜像**: `ghcr.io/linuxserver/baseimage-selkies:ubuntunoble`
-- **微信**: 官方 Linux 版 (4.1.x)
-- **远程访问**: Selkies WebRTC
-- **窗口管理**: Python Xlib + Openbox
-- **AI/OCR**: RapidOCR + Ultralytics YOLO
-- **消息协议**: Protocol Buffers + XML + Zstandard
-- **LLM 集成**: MCP Server (FastMCP)
-- **消息转发**: MQTT (Paho)
-
-## MCP Server
-
-Bot 启动后 MCP Server 监听 `http://localhost:8000`，提供以下工具：
-- `send_text_msg` - 发送文本消息
-- `send_file_msg` - 发送文件
-- `send_pat_msg` - 发送拍一拍
-- `leave_room` - 退出群聊
-- `public_room_announcement` - 发布群公告
-- `rename_room_name` - 修改群名
-- `remove_room_member` - 移除群成员
-- `invite_room_member` - 邀请入群
-- 更多工具见 `mcp/app.py`
-
-## 管理与调试页面
-
-Bot 在 MCP HTTP 服务上挂载内部 manager 页面，容器内地址为
-`http://localhost:8000/dashboard`。按默认 compose 映射，宿主机访问：
-
-```bash
+```text
 http://localhost:8100/dashboard
 ```
 
-页面包含 Overview、Database、Messages、RPA、Window、Logs 几个工作区，可查看
-bot/MCP/RPA/数据库/视觉读取/YOLO/队列/插件状态、脱敏日志尾部和不含聊天内容的窗口布局图。
-内部页还提供 DB rescan、联系人搜索、文本历史查询、最近消息媒体解析检查、DB 轮询暂停/恢复，
-以及文本 RPA 入队。该页面没有内置鉴权，部署时应放在代理鉴权之后。
-旧入口 `/debug` 保留为兼容跳转，旧的 `/debug/api/...` API 也继续可用。
+重点确认：
 
-默认不会暴露原始微信截图；如需临时调试像素级问题，可在
-`config/config.yaml` 中显式设置 `debug.allow_raw_screenshot: true` 后重启 bot。
+- `Database` 可用，并且 contacts/message tables 非 0。
+- `Bot`、`RPA`、`MessageService` 正在运行。
+- `Window` 能识别当前微信窗口尺寸和消息区域。
+- YOLO/RPA 使用的窗口尺寸稳定，例如当前默认 1008px 宽并按 stride 对齐。
 
-## 项目结构
+### 4. 连接 MCP 客户端
 
-```
-wechat-ai/
-├── Dockerfile                    # 容器构建
-├── docker-compose.yml            # 部署配置
-├── config.example.yaml           # Bot 配置模板
-├── pyproject.toml                # Python 包定义
-├── root/                         # 容器初始化脚本
-│   ├── defaults/{autostart,menu.xml}
-│   └── scripts/{start.sh,start-bot.sh,health-check.sh}
-├── src/wechat_ai_bot/            # Bot 源码
-│   ├── bot.py                    # 主 Bot 类
-│   ├── rpa/                      # Linux RPA 层 (X11)
-│   ├── plugins/                  # 插件系统
-│   ├── mcp/                      # MCP Server
-│   ├── weixin/                   # 消息解析
-│   └── services/                 # 核心服务
-├── plugins/                      # 用户插件目录
-└── config/                       # 运行时数据 (/config)
+MCP endpoint：
+
+```text
+http://localhost:8100/mcp
 ```
 
-## 健康检查
+推荐首次调用顺序：
+
+1. `get_runtime_status`
+2. `search_contacts`
+3. `get_recent_messages` 或 `get_chat_summary_context`
+4. `send_text_msg` 且设置 `dry_run=true`
+5. 人类确认联系人和文本后，再调用 `send_text_msg`
+
+完整工具说明、Claude Code/OpenClaw 配置示例和安全约束见 [MCP 使用指南](docs/mcp.md)。
+
+## MCP 能力边界
+
+MCP Server 同时提供读库工具和少量已经在 Linux RPA 侧跑通的写操作。
+
+读/状态工具：
+
+- `get_runtime_status`
+- `get_wechat_user_info`
+- `search_contacts`
+- `get_recent_chats`
+- `get_recent_messages`
+- `get_chat_summary_context`
+- `query_wechat_msg`
+- `query_room_member_list`
+
+已移植写操作：
+
+- `send_text_msg`
+- `public_room_announcement`
+- `leave_room`
+
+尚未移植的 Linux RPA 工具会返回结构化 `status: "unavailable"`，不会假装提交成功：
+
+- `send_file_msg`
+- `send_pat_msg`
+- `remove_room_member`
+- `invite_room_member`
+- `rename_room_name`
+- `rename_name_in_room`
+
+## 管理面板
+
+管理面板挂载在 MCP HTTP 服务上：
+
+```text
+http://localhost:8100/dashboard
+```
+
+功能包括：
+
+- Overview：bot、服务、队列、进程、插件和 YOLO 状态。
+- Database：SQLCipher key 扫描、数据库发现、联系人/消息表状态、重新扫描。
+- Messages：联系人搜索、文本历史、图片/视频/文件消息解析检查。
+- RPA：文本消息入队。
+- Window：不含聊天内容的窗口布局图和消息区域几何信息。
+- Logs：脱敏日志尾部。
+
+管理面板没有内置鉴权。对外暴露前必须放到反向代理、登录鉴权和网络访问控制之后。旧入口 `/debug` 会 307 跳转到 `/dashboard`，旧的 `/debug/api/...` 仍兼容。
+
+## 数据库读取
+
+Linux 微信 4.x 数据库位于：
+
+```text
+/config/xwechat_files/<account>_<suffix>/db_storage/
+```
+
+业务 `.db` 是 SQLCipher 数据库，标准库 `sqlite3` 不能直接打开。本项目使用 Python 驱动 `sqlcipher3-binary`：
+
+- 启动时只读扫描账号目录。
+- 从 WeChat 进程内存中寻找 SQLCipher raw key。
+- 用数据库首页 HMAC 验证 key。
+- key 只保存在 bot 进程内存，不落盘。
+- 成功后通过 `MessageService` 轮询 `Msg_*` 表的新消息。
+
+bot 由 s6 作为 root 服务启动，是为了读取 `/proc/<wechat-pid>/mem`。WeChat、X11 和 Selkies 桌面会话仍按容器桌面用户运行。
+
+## 配置
+
+主要文件：
+
+| 文件 | 作用 |
+| --- | --- |
+| `.env` | 宿主机端口、容器开关 |
+| `config/config.yaml` | 运行时 bot 配置 |
+| `config.example.yaml` | 新配置模板 |
+| `docker-compose.yml` | 容器定义 |
+
+关键配置：
+
+- `database.enabled`：启用 Linux 微信数据库读取。
+- `database.scan_keys`：扫描微信进程内存中的 SQLCipher key。
+- `rpa.window.*`：稳定微信窗口尺寸，服务 RPA 和 YOLO 对齐。
+- `visual_message.*`：OCR/YOLO 视觉读取兜底配置。
+- `mcp.host` / `mcp.port`：容器内 MCP 监听地址和端口。
+- `mqtt.host`：可选的旧式/远程 MQTT 转发；留空即关闭。
+
+## 架构
+
+```text
+Browser
+  |
+  | HTTPS/WebRTC
+  v
+Selkies desktop (Openbox + Linux WeChat)
+  |
+  | X11 screenshot / input automation
+  v
+Bot runtime
+  |-- LinuxDatabaseService -> SQLCipher WeChat DBs
+  |-- MessageService       -> DB polling and message factory
+  |-- VisualMessageService -> OCR/YOLO fallback
+  |-- RPAService           -> local RPA action queue
+  |-- PluginManager        -> plugin entry points
+  `-- FastMCP             -> /mcp and /dashboard
+```
+
+MCP 和 bot 在同一进程运行时，写操作默认直接进入本地 `rpa_task_queue`，不再依赖 MQTT。只有显式配置 `mqtt.host` 且没有本地 bot 队列时，才会走 MQTT dispatcher。
+
+## 开发与测试
+
+容器内运行测试：
+
+```bash
+docker exec wechat-ai bash -lc 'cd /app && PYTHONPATH=/app/src /opt/venv-bot/bin/python -m unittest discover -s /app/tests -t /app -v'
+```
+
+常用检查：
 
 ```bash
 docker exec wechat-ai /scripts/health-check.sh
-```
-
-## 日志
-
-```bash
-# 查看容器日志
 docker compose logs -f wechat-ai
-
-# 查看 bot 日志
 tail -f config/logs/bot.log
 ```
 
-## 升级微信
+重新构建并使用现有 `./config` 测试：
 
 ```bash
-docker compose build --no-cache
-docker compose up -d
+docker compose build wechat-ai
+docker compose up -d --force-recreate wechat-ai
 ```
 
-## 许可证与致谢
+推送到 GitHub 后，GitHub Actions 会构建并发布 amd64 镜像到 `ghcr.io/chisbread/wechat-ai`。
 
-本项目基于 **GPL-3.0-or-later** 许可证开源。项目集成和移植了
-`omni-bot-sdk-oss` 的 bot/RPA/插件/消息解析思路及部分代码，因此遵循其 GPL-3.0-or-later
-授权要求。容器桌面与 Selkies/微信封装方案参考 `wechat-selkies`，该项目采用 MIT License。
+## 文档
+
+- [MCP 使用指南](docs/mcp.md)
+- [Claude Code 接入](docs/clients/claude-code.md)
+- [OpenClaw 接入](docs/clients/openclaw.md)
+- [微信操作员 Prompt](docs/prompts/wechat-operator.md)
+- [只读分析 Prompt](docs/prompts/wechat-readonly-analyst.md)
+- [WeChat-AI Skill 模板](docs/skills/wechat-ai/SKILL.md)
+
+## License And Credits
+
+本项目以 **GPL-3.0-or-later** 开源。
+
+项目集成和移植了 `omni-bot-sdk-oss` 的 bot/RPA/插件/消息解析思路及部分代码，因此遵循其 GPL-3.0-or-later 授权要求。容器桌面与 Selkies/微信封装方案参考 `wechat-selkies`，该项目采用 MIT License。
 
 详见 [LICENSE](LICENSE) 和 [CREDITS.md](CREDITS.md)。

@@ -24,6 +24,13 @@ done
 cd /app
 while true; do
     echo "[bot] $(date): Starting bot as ${BOT_USER} on DISPLAY=${DISPLAY:-unset}..." | tee -a "$BOT_LOG"
+    if command -v xrdb >/dev/null 2>&1; then
+        echo "Xft.dpi: 96" > /config/.Xresources
+        DISPLAY="${DISPLAY:-:1}" xrdb /config/.Xresources 2>/dev/null || true
+    fi
+    if command -v xset >/dev/null 2>&1; then
+        DISPLAY="${DISPLAY:-:1}" xset +dpms 2>/dev/null || true
+    fi
     if [ "$BOT_USER" = "root" ]; then
         RUN_PREFIX=()
     else
