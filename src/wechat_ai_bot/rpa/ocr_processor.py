@@ -64,9 +64,14 @@ class OCRProcessor:
                 result = self._process_local(image_path, image)
             result = self._merge_text_blocks(result)
             result = [r for r in result if r["confidence"] >= self.min_confidence]
-            end_time = time.time()
-            self.logger.info(f"OCR 处理耗时: {end_time - start_time:.3f}秒")
-            self.logger.info(result)
+            elapsed = time.time() - start_time
+            if result:
+                self.logger.info(
+                    "OCR 识别到 %s 个文本块，耗时: %.3f秒", len(result), elapsed
+                )
+                self.logger.debug(result)
+            else:
+                self.logger.debug("OCR 未识别到文本，耗时: %.3f秒", elapsed)
             return result
         except Exception as e:
             self.logger.error(f"OCR 处理出错: {str(e)}")
@@ -106,10 +111,10 @@ class OCRProcessor:
             if image_path:
                 with open(image_path, "rb") as f:
                     file_dict = {"image_file": (image_path, f, "image/png")}
-                data = {"use_cls": False}
-                response = requests.post(
-                    self.remote_url, files=file_dict, data=data, timeout=60
-                )
+                    data = {"use_cls": False}
+                    response = requests.post(
+                        self.remote_url, files=file_dict, data=data, timeout=60
+                    )
                 result = response.json()
                 return self._format_remote_result(result)
             elif image:
@@ -135,13 +140,35 @@ class OCRProcessor:
         """
         formatted_result = []
         try:
+            if ocr_result is None:
+                return formatted_result
             if not all(
                 hasattr(ocr_result, attr) for attr in ["boxes", "txts", "scores"]
             ):
                 self.logger.error("本地 OCR 结果缺少必要字段")
                 return formatted_result
-            for i in range(len(ocr_result.boxes)):
-                box = ocr_result.boxes[i]
+
+            boxes = ocr_result.boxes
+            txts = ocr_result.txts
+            scores = ocr_result.scores
+            if boxes is None or txts is None or scores is None:
+                return formatted_result
+
+            result_count = min(len(boxes), len(txts), len(scores))
+            if (
+                result_count != len(boxes)
+                or result_count != len(txts)
+                or result_count != len(scores)
+            ):
+                self.logger.warning(
+                    "本地 OCR 结果字段长度不一致: boxes=%s txts=%s scores=%s",
+                    len(boxes),
+                    len(txts),
+                    len(scores),
+                )
+
+            for i in range(result_count):
+                box = boxes[i]
                 x_coords = [point[0] for point in box]
                 y_coords = [point[1] for point in box]
                 bbox = [
@@ -150,8 +177,8 @@ class OCRProcessor:
                     float(max(x_coords)),
                     float(max(y_coords)),
                 ]
-                text = ocr_result.txts[i]
-                score = ocr_result.scores[i]
+                text = txts[i]
+                score = scores[i]
                 formatted_result.append(
                     {"pixel_bbox": bbox, "label": text, "confidence": float(score)}
                 )

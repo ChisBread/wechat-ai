@@ -10,33 +10,27 @@ from typing import Any, Dict
 
 from wechat_ai_bot.clients.mqtt_client import MQTTClient
 from wechat_ai_bot.models import UserInfo
-# Action imports: try the full set, fall back to available ones
-try:
-    from wechat_ai_bot.rpa.action_handlers import (
-        Invite2RoomAction,
-        LeaveRoomAction,
-        PatAction,
-        RemoveRoomMemberAction,
-        RenameNameInRoomAction,
-        RenameRoomNameAction,
-        RenameRoomRemarkAction,
-        SendFileAction,
-        SendPyqAction,
-        SendTextMessageAction,
-        PublicRoomAnnouncementAction,
-    )
-except ImportError:
-    LeaveRoomAction = None
-    PublicRoomAnnouncementAction = None
-    Invite2RoomAction = None
-    PatAction = None
-    RemoveRoomMemberAction = None
-    RenameNameInRoomAction = None
-    RenameRoomNameAction = None
-    RenameRoomRemarkAction = None
-    SendFileAction = None
-    SendPyqAction = None
-    SendTextMessageAction = None
+
+
+def _optional_action_import(name: str):
+    try:
+        module = __import__("wechat_ai_bot.rpa.action_handlers", fromlist=[name])
+        return getattr(module, name)
+    except (ImportError, AttributeError):
+        return None
+
+
+Invite2RoomAction = _optional_action_import("Invite2RoomAction")
+LeaveRoomAction = _optional_action_import("LeaveRoomAction")
+PatAction = _optional_action_import("PatAction")
+RemoveRoomMemberAction = _optional_action_import("RemoveRoomMemberAction")
+RenameNameInRoomAction = _optional_action_import("RenameNameInRoomAction")
+RenameRoomNameAction = _optional_action_import("RenameRoomNameAction")
+RenameRoomRemarkAction = _optional_action_import("RenameRoomRemarkAction")
+SendFileAction = _optional_action_import("SendFileAction")
+SendPyqAction = _optional_action_import("SendPyqAction")
+SendTextMessageAction = _optional_action_import("SendTextMessageAction")
+PublicRoomAnnouncementAction = _optional_action_import("PublicRoomAnnouncementAction")
 
 from wechat_ai_bot.rpa.rpa_action import RPAActionType
 from wechat_ai_bot.utils.helpers import download_file_if_url
@@ -141,7 +135,10 @@ class MQTTService:
                 local_type = payload.get("local_type")
                 action = None
                 if local_type == MessageType.Text:
-                    at_list = payload.get("at_list")
+                    if SendTextMessageAction is None:
+                        self.logger.error("SendTextMessageAction is not available")
+                        return
+                    at_list = payload.get("at_list") or []
                     if len(at_list) == 0:
                         action = SendTextMessageAction(
                             content=payload.get("message_content"),
@@ -154,6 +151,9 @@ class MQTTService:
                             at_user_name=at_list[0],
                         )
                 elif local_type == MessageType.File:
+                    if SendFileAction is None:
+                        self.logger.error("SendFileAction is not available")
+                        return
                     file_path = payload.get("file")
                     file_path = await download_file_if_url(file_path)
                     self.logger.info(f"下载文件：{file_path}")
@@ -163,6 +163,9 @@ class MQTTService:
                         is_chatroom=payload.get("is_chatroom"),
                     )
                 elif local_type == MessageType.Pat:
+                    if PatAction is None:
+                        self.logger.error("PatAction is not available")
+                        return
                     action = PatAction(
                         target=payload.get("nickname"),
                         user_name=payload.get("at_list")[0],
@@ -175,6 +178,9 @@ class MQTTService:
                 action_type = payload.get("action_type")
                 action_data = payload.get("action_data")
                 if action_type == RPAActionType.SEND_PYQ.value:
+                    if SendPyqAction is None:
+                        self.logger.error("SendPyqAction is not available")
+                        return
                     # 这里收到的图片可能是网络地址，因此要循环遍历，全部下载到本地
                     images = []
                     for image in action_data.get("images"):
@@ -186,18 +192,27 @@ class MQTTService:
                     )
                     self.rpa_task_queue.put(action)
                 elif action_type == RPAActionType.REMOVE_ROOM_MEMBER.value:
+                    if RemoveRoomMemberAction is None:
+                        self.logger.error("RemoveRoomMemberAction is not available")
+                        return
                     action = RemoveRoomMemberAction(
                         user_name=action_data.get("user_name"),
                         target=action_data.get("target"),
                     )
                     self.rpa_task_queue.put(action)
                 elif action_type == RPAActionType.INVITE_2_ROOM.value:
+                    if Invite2RoomAction is None:
+                        self.logger.error("Invite2RoomAction is not available")
+                        return
                     action = Invite2RoomAction(
                         user_name=action_data.get("user_name"),
                         target=action_data.get("target"),
                     )
                     self.rpa_task_queue.put(action)
                 elif action_type == RPAActionType.PUBLIC_ROOM_ANNOUNCEMENT.value:
+                    if PublicRoomAnnouncementAction is None:
+                        self.logger.error("PublicRoomAnnouncementAction is not available")
+                        return
                     action = PublicRoomAnnouncementAction(
                         content=action_data.get("content"),
                         target=action_data.get("target"),
@@ -205,24 +220,36 @@ class MQTTService:
                     )
                     self.rpa_task_queue.put(action)
                 elif action_type == RPAActionType.RENAME_ROOM_NAME.value:
+                    if RenameRoomNameAction is None:
+                        self.logger.error("RenameRoomNameAction is not available")
+                        return
                     action = RenameRoomNameAction(
                         target=action_data.get("target"),
                         name=action_data.get("name"),
                     )
                     self.rpa_task_queue.put(action)
                 elif action_type == RPAActionType.RENAME_ROOM_REMARK.value:
+                    if RenameRoomRemarkAction is None:
+                        self.logger.error("RenameRoomRemarkAction is not available")
+                        return
                     action = RenameRoomRemarkAction(
                         target=action_data.get("target"),
                         remark=action_data.get("remark"),
                     )
                     self.rpa_task_queue.put(action)
                 elif action_type == RPAActionType.RENAME_NAME_IN_ROOM.value:
+                    if RenameNameInRoomAction is None:
+                        self.logger.error("RenameNameInRoomAction is not available")
+                        return
                     action = RenameNameInRoomAction(
                         target=action_data.get("target"),
                         name=action_data.get("name"),
                     )
                     self.rpa_task_queue.put(action)
                 elif action_type == RPAActionType.LEAVE_ROOM.value:
+                    if LeaveRoomAction is None:
+                        self.logger.error("LeaveRoomAction is not available")
+                        return
                     action = LeaveRoomAction(
                         target=action_data.get("target"),
                     )

@@ -3,8 +3,10 @@
 # Checks: WeChat process, bot process, X11 display
 
 BOT_PID=$(pgrep -f "wechat_ai_bot.bot" 2>/dev/null)
-WECHAT_WINDOW=$(xdotool search --name "微信" 2>/dev/null | head -1)
-DISPLAY_OK=$(xdpyinfo -display :99 >/dev/null 2>&1 && echo "OK" || echo "FAIL")
+DISPLAY_NAME="${DISPLAY:-:1}"
+MCP_PORT="${MCP_PORT:-8000}"
+WECHAT_WINDOW=$(DISPLAY="$DISPLAY_NAME" xdotool search --class "wechat" 2>/dev/null | head -1)
+DISPLAY_OK=$(xdpyinfo -display "$DISPLAY_NAME" >/dev/null 2>&1 && echo "OK" || echo "FAIL")
 
 STATUS=0
 
@@ -12,9 +14,9 @@ echo "=== WeChat-AI Health Check ==="
 
 # Check X11 display
 if [ "$DISPLAY_OK" = "OK" ]; then
-    echo "[OK] X11 display :99"
+    echo "[OK] X11 display $DISPLAY_NAME"
 else
-    echo "[FAIL] X11 display :99"
+    echo "[FAIL] X11 display $DISPLAY_NAME"
     STATUS=1
 fi
 
@@ -44,8 +46,8 @@ fi
 
 # Check MCP port if bot is running
 if [ -n "$BOT_PID" ]; then
-    if ss -tlnp | grep -q ":8000"; then
-        echo "[OK] MCP server port (8000) listening"
+    if ss -tlnp | grep -q ":${MCP_PORT}"; then
+        echo "[OK] MCP server port (${MCP_PORT}) listening"
     else
         echo "[INFO] MCP server not yet listening (may still be starting)"
     fi

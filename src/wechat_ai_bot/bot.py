@@ -5,6 +5,7 @@ Integrates all components: visual message reading, RPA, plugins, MCP, MQTT.
 
 import argparse
 import logging
+import os
 import queue
 import signal
 import time
@@ -43,6 +44,8 @@ class Bot:
         self.logger = logging.getLogger(self.__class__.__name__)
 
         self.is_running = False
+        self.chat_window_ready = False
+        self._window_init_thread = None
         self._components: List[Any] = []
 
         # ---- RPA Components ----
@@ -132,11 +135,12 @@ class Bot:
 
         # ---- Component registry (for setup/teardown) ----
         self._components = [
+            self.image_processor,
+            self.ocr_processor,
             self.plugin_manager,
             self.processor_service,
             self.rpa_service,
             self.visual_message_service,
-            self.weixin_status_service,
         ]
         if self.mqtt_service:
             self._components.append(self.mqtt_service)
@@ -146,7 +150,7 @@ class Bot:
         self.logger.info("=" * 60)
         self.logger.info("WeChat-AI Bot initialized (Linux)")
         self.logger.info(f"  User: {self.user_info.nickname}")
-        self.logger.info(f"  MCP port: {self.config.get('mcp.port', 8000)}")
+        self.logger.info(f"  MCP port: {os.environ.get('MCP_PORT') or self.config.get('mcp.port', 8000)}")
         self.logger.info(f"  Visual poll interval: {visual_config.get('poll_interval', 2.0)}s")
         self.logger.info("=" * 60)
 
@@ -156,18 +160,6 @@ class Bot:
 
         # Plugin loading
         self.plugin_manager.setup()
-
-        # Wait for WeChat window and init layout
-        self.logger.info("Waiting for WeChat window...")
-        max_retries = 30
-        for i in range(max_retries):
-            if self.window_manager.init_chat_window():
-                self.logger.info("Chat window initialized successfully")
-                break
-            self.logger.warning(f"Chat window init failed, retry {i+1}/{max_retries}")
-            time.sleep(3)
-        else:
-            self.logger.error("Failed to initialize chat window after retries")
 
         # Start all services
         for component in self._components:
@@ -179,6 +171,9 @@ class Bot:
             except Exception as e:
                 self.logger.error(f"  {name}: setup failed: {e}")
 
+        self.is_running = True
+        self._start_window_init_loop()
+
         for component in self._components:
             name = component.__class__.__name__
             try:
@@ -188,8 +183,27 @@ class Bot:
             except Exception as e:
                 self.logger.error(f"  {name}: start failed: {e}")
 
-        self.is_running = True
         self.logger.info("--- Bot Setup Complete ---")
+
+    def _start_window_init_loop(self):
+        self._window_init_thread = threading.Thread(
+            target=self._window_init_loop,
+            daemon=True,
+            name="WindowInitLoop",
+        )
+        self._window_init_thread.start()
+
+    def _window_init_loop(self):
+        self.logger.info("Waiting for WeChat chat window...")
+        retry = 0
+        while self.is_running and not self.chat_window_ready:
+            retry += 1
+            if self.window_manager.init_chat_window():
+                self.chat_window_ready = True
+                self.logger.info("Chat window initialized successfully")
+                return
+            self.logger.warning(f"Chat window init failed, retry {retry}")
+            time.sleep(3)
 
     def start(self):
         """Start the bot. Blocks on MCP server until signal."""
@@ -215,6 +229,8 @@ class Bot:
         """Graceful shutdown of all components."""
         self.logger.info("--- Bot Teardown ---")
         self.is_running = False
+        if self._window_init_thread and self._window_init_thread.is_alive():
+            self._window_init_thread.join(timeout=5)
 
         for component in reversed(self._components):
             name = component.__class__.__name__

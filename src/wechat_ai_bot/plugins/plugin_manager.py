@@ -38,6 +38,9 @@ class PluginManager:
         """
         初始化并加载所有插件。
         """
+        if self.plugins:
+            self.logger.info("插件已加载，跳过重复 setup。")
+            return
         self.load_plugins()
 
     def load_plugins(self):

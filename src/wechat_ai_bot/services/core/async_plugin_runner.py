@@ -6,6 +6,7 @@
 import asyncio
 import logging
 import threading
+import time
 from queue import Queue
 
 from wechat_ai_bot.plugins.interface import ProcessorService
@@ -42,7 +43,7 @@ class AsyncPluginRunner:
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.thread.start()
         while self.loop is None or not self.loop.is_running():
-            pass  # 等待事件循环真正启动
+            time.sleep(0.01)
         self.logger.info("异步执行器已启动。")
 
     def stop(self):

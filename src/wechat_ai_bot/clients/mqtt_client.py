@@ -36,6 +36,8 @@ class MQTTClient:
         self.password = password
         self.message_callback: Optional[Callable] = None
         self.logger = logging.getLogger(__name__)
+        self.client.connected_flag = False
+        self.client.bad_connection_flag = False
         self.logger.info(f"MQTTClient initialized with client_id: {self.client_id}")
         if username and password:
             self.client.username_pw_set(username, password)

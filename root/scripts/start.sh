@@ -1,5 +1,8 @@
 #!/bin/bash
 
+BOT_LOG="/config/logs/bot.log"
+mkdir -p /config/logs /config/runtime_images /config/.config/Ultralytics
+
 # clean up stale dbus pid file to prevent startup failures after container restart
 rm -f /run/dbus/pid
 
@@ -39,10 +42,14 @@ nohup stalonetray --dockapp-mode simple > /dev/null 2>&1 &
 
 # start WeChat application in the background if exists and auto-start enabled
 if [ "$AUTO_START_WECHAT" = "true" ]; then
-    if [ -f /usr/bin/wechat ]; then nohup /usr/bin/wechat > /dev/null 2>&1 & fi
+    if [ -f /usr/bin/wechat ]; then
+        echo "[wechat-ai] $(date): launching WeChat" | tee -a "$BOT_LOG"
+        nohup /usr/bin/wechat > /config/logs/wechat.log 2>&1 &
+    fi
 fi
 
 # Start the AI bot
 if [ "$BOT_ENABLED" = "true" ]; then
+    echo "[wechat-ai] $(date): launching bot" | tee -a "$BOT_LOG"
     /scripts/start-bot.sh &
 fi

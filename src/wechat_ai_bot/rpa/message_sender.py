@@ -5,13 +5,12 @@
 
 import logging
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import wechat_ai_bot.utils.mouse as pyautogui
 from Levenshtein import ratio
 from wechat_ai_bot.rpa.image_processor import ImageProcessor
 from wechat_ai_bot.rpa.ocr_processor import OCRProcessor
-from wechat_ai_bot.rpa.linux_window_manager import LinuxWindowManager as WindowManager
 from wechat_ai_bot.utils.helpers import (
     copy_file_to_clipboard,
     get_center_point,
@@ -29,7 +28,7 @@ class MessageSender:
     支持文本消息、@用户、剪贴板图片等自动化发送。
     """
 
-    def __init__(self, window_manager: WindowManager):
+    def __init__(self, window_manager: Any):
         """
         初始化 MessageSender。
         Args:

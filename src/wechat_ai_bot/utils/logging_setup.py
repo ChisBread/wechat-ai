@@ -65,4 +65,4 @@ def setup_logging(log_dir: str = "logs", log_level: int = logging.INFO):
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
     logging.getLogger("ultralytics").setLevel(logging.ERROR)
-    logging.getLogger("RapidOCR").setLevel(logging.WARNING)
+    logging.getLogger("RapidOCR").setLevel(logging.ERROR)

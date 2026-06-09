@@ -331,6 +331,91 @@ class TextMessage(Message):
 
 
 @dataclass
+class VisualTextMessage:
+    """Text message read from the Linux UI instead of the WeChat database."""
+
+    content: str
+    user_info: UserInfo
+    create_time: int
+    target_name: str = ""
+    session_id: str = ""
+    region: Optional[list] = None
+    source: str = "visual"
+    local_id: Optional[int] = None
+    server_id: Optional[int] = None
+    local_type: int = MessageType.Text
+    room: Optional[Any] = None
+    contact: Optional[Any] = None
+
+    @property
+    def create_datetime(self) -> datetime:
+        return datetime.fromtimestamp(self.create_time)
+
+    @property
+    def str_time(self) -> str:
+        return datetime.fromtimestamp(self.create_time).strftime("%Y-%m-%d %H:%M:%S")
+
+    @property
+    def message_content(self) -> str:
+        return self.content
+
+    @property
+    def parsed_content(self) -> str:
+        return self.content
+
+    @property
+    def parsed_source(self) -> str:
+        return self.source
+
+    @property
+    def real_sender_name(self) -> str:
+        return self.target_name
+
+    @property
+    def is_self(self) -> bool:
+        return False
+
+    @property
+    def is_at(self) -> bool:
+        return False
+
+    @property
+    def is_chatroom(self) -> bool:
+        return False
+
+    @property
+    def type_name(self) -> str:
+        return MessageType.name(self.local_type)
+
+    @property
+    def target(self) -> str:
+        return self.target_name
+
+    def to_text(self) -> str:
+        return self.content
+
+    def to_json(self) -> dict:
+        return {
+            "type": str(self.local_type),
+            "status": None,
+            "server_id": "",
+            "real_sender_name": self.real_sender_name,
+            "parsed_content": self.parsed_content,
+            "is_chatroom": self.is_chatroom,
+            "str_time": self.str_time,
+            "room_nickname": "",
+            "room_username": "",
+            "xml_dict": {},
+            "is_self": self.is_self,
+            "text": self.content,
+            "source": self.source,
+            "target": self.target_name,
+            "session_id": self.session_id,
+            "region": self.region,
+        }
+
+
+@dataclass
 class QuoteMessage(TextMessage):
     # 引用消息
     quote_message: Message

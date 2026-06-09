@@ -13,9 +13,10 @@ import logging
 import time
 import threading
 from collections import OrderedDict
-from typing import List, Optional
+from typing import Any, Optional
 
-from wechat_ai_bot.rpa.linux_window_manager import LinuxWindowManager
+from PIL import Image, ImageFilter, ImageStat
+
 from wechat_ai_bot.rpa.image_processor import ImageProcessor
 from wechat_ai_bot.rpa.ocr_processor import OCRProcessor
 
@@ -33,7 +34,7 @@ class VisualMessageService:
 
     def __init__(
         self,
-        window_manager: LinuxWindowManager,
+        window_manager: Any,
         image_processor: ImageProcessor,
         ocr_processor: OCRProcessor,
         message_queue,
@@ -121,8 +122,12 @@ class VisualMessageService:
         try:
             # Screenshot the message area
             screenshot = self.image_processor.take_screenshot(
-                region=[msg_x, msg_y, msg_x + msg_w, msg_y + msg_h]
+                region=[msg_x, msg_y, msg_w, msg_h]
             )
+            if screenshot is None:
+                return []
+            if self._is_blank_message_area(screenshot):
+                return []
 
             # OCR the entire message area
             ocr_results = self.ocr_processor.process_image(image=screenshot)
@@ -155,6 +160,12 @@ class VisualMessageService:
                     "content": text,
                     "timestamp": time.time(),
                     "source": "visual",
+                    "session_id": self.window_manager.get_current_session_id()
+                    if hasattr(self.window_manager, "get_current_session_id")
+                    else "",
+                    "target": self.window_manager.get_current_session_name()
+                    if hasattr(self.window_manager, "get_current_session_name")
+                    else "",
                     "region": [
                         msg_x + result.get("pixel_bbox", [0, 0, 0, 0])[0],
                         msg_y + result.get("pixel_bbox", [0, 0, 0, 0])[1],
@@ -169,6 +180,58 @@ class VisualMessageService:
         except Exception as e:
             self.logger.error(f"Error reading visible messages: {e}")
             return []
+
+    def _is_blank_message_area(self, image: Image.Image) -> bool:
+        """
+        Detect an empty WeChat message pane before invoking OCR.
+
+        RapidOCR logs a warning for completely blank images. In the visual poller
+        that is a normal idle state, so filter near-uniform panes up front.
+        """
+        try:
+            width, height = image.size
+            if width <= 0 or height <= 0:
+                return True
+
+            margin_x = min(16, max(4, width // 40))
+            margin_y = min(16, max(4, height // 80))
+            if width > margin_x * 2 and height > margin_y * 2:
+                sample = image.crop(
+                    (margin_x, margin_y, width - margin_x, height - margin_y)
+                )
+            else:
+                sample = image
+
+            sample = sample.convert("L")
+            max_side = max(sample.size)
+            if max_side > 512:
+                scale = 512 / max_side
+                sample = sample.resize(
+                    (
+                        max(1, int(sample.width * scale)),
+                        max(1, int(sample.height * scale)),
+                    )
+                )
+
+            gray_stddev = ImageStat.Stat(sample).stddev[0]
+            if gray_stddev >= 1.4:
+                return False
+
+            edges = sample.filter(ImageFilter.FIND_EDGES)
+            hist = edges.histogram()
+            total = sum(hist) or 1
+            edge_density = sum(hist[9:]) / total
+            is_blank = edge_density < 0.018
+            if is_blank:
+                self.logger.debug(
+                    "Message area appears blank: stddev=%.3f edge_density=%.5f",
+                    gray_stddev,
+                    edge_density,
+                )
+            return is_blank
+        except Exception as e:
+            self.logger.debug("Blank message area check failed: %s", e)
+            return False
 
     def _hash_text(self, text: str) -> str:
         """Generate a stable hash of message text for deduplication."""

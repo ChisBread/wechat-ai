@@ -10,6 +10,7 @@ import functools
 import hashlib
 import json
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -111,6 +112,7 @@ def create_app(user_info: UserInfo, config: dict) -> FastMCP:
         app_lifespan, user_info=user_info, mqtt_config=config.get("mqtt", {})
     )
     mcp_config = config.get("mcp", {})
+    mcp_port = int(os.environ.get("MCP_PORT") or mcp_config.get("port", 8000))
     mcp = FastMCP(
         name="WeChat-AI-MCP",
         instructions="""
@@ -123,7 +125,7 @@ def create_app(user_info: UserInfo, config: dict) -> FastMCP:
         lifespan=lifespan_handler,
         json_response=True,
         host=mcp_config.get("host", "0.0.0.0"),
-        port=mcp_config.get("port", 8000),
+        port=mcp_port,
     )
 
     # --- Tool Functions ---

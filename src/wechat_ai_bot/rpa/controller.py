@@ -92,9 +92,11 @@ class RPAController:
             ForwardMessageHandler,
             LeaveRoomHandler,
             PublicRoomAnnouncementHandler,
+            SendTextMessageHandler,
         )
 
         handler_classes = [
+            (RPAActionType.SEND_TEXT_MESSAGE, SendTextMessageHandler),
             (RPAActionType.PUBLIC_ROOM_ANNOUNCEMENT, PublicRoomAnnouncementHandler),
             (RPAActionType.DOWNLOAD_IMAGE, DownloadImageHandler),
             (RPAActionType.DOWNLOAD_FILE, DownloadFileHandler),

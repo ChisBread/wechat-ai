@@ -1,13 +1,24 @@
-"""
-Mouse utilities — pure xdotool, no pyautogui dependency.
-"""
-import math, random, re, subprocess, time
+"""Mouse utilities backed by X11 xdotool."""
+
+import math
+import os
+import random
+import re
+import subprocess
+import time
 
 class ScreenSize:
-    def __init__(self, w=1024, h=768): self.width = w; self.height = h
+    def __init__(self, w=1024, h=768):
+        self.width = w
+        self.height = h
 
 def _xdotool(*args):
     subprocess.run(["xdotool"] + list(args), capture_output=True, timeout=5)
+
+def _run_display_command(cmd):
+    env = os.environ.copy()
+    env.setdefault("DISPLAY", ":1")
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=5, env=env)
 
 def position():
     r = subprocess.run(["xdotool", "getmouselocation"], capture_output=True, text=True, timeout=3)
@@ -15,7 +26,24 @@ def position():
     y = int(re.search(r"y:(\d+)", r.stdout).group(1))
     return (x, y)
 
-def size(): return ScreenSize(1024, 768)
+def size():
+    try:
+        result = _run_display_command(["xdotool", "getdisplaygeometry"])
+        parts = result.stdout.strip().split()
+        if result.returncode == 0 and len(parts) == 2:
+            return ScreenSize(int(parts[0]), int(parts[1]))
+    except Exception:
+        pass
+
+    try:
+        result = _run_display_command(["xdpyinfo"])
+        match = re.search(r"dimensions:\s+(\d+)x(\d+)\s+pixels", result.stdout)
+        if result.returncode == 0 and match:
+            return ScreenSize(int(match.group(1)), int(match.group(2)))
+    except Exception:
+        pass
+
+    return ScreenSize(1024, 768)
 
 def moveTo(x, y, duration=0.1, tween=None):
     _xdotool("mousemove", str(x), str(y))
@@ -45,7 +73,11 @@ def hotkey(*keys):
 def typewrite(text, interval=0.02):
     _xdotool("type", "--delay", str(int(interval*1000)), "--", text)
 
-def human_like_mouse_move(tx, ty, speed_range=(700,1200), min_duration=0.1, max_duration=1.0, **kw):
+def human_like_mouse_move(tx=None, ty=None, speed_range=(700,1200), min_duration=0.1, max_duration=1.0, **kw):
+    tx = kw.get("target_x", tx)
+    ty = kw.get("target_y", ty)
+    if tx is None or ty is None:
+        return
     cx, cy = position()
     d = math.sqrt((tx-cx)**2 + (ty-cy)**2)
     if d == 0: return

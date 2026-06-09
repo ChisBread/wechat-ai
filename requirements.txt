@@ -1,25 +1,37 @@
-# WeChat-AI Bot Python deps (Python 3.12 venv)
-mss
-Pillow
-ultralytics
-onnxruntime
-rapidocr
-fastmcp
-paho-mqtt
-protobuf
-lxml
-xmltodict
-zstandard
-aiohttp
-aiofiles
-cryptography
-fuzzywuzzy
-python-Levenshtein
-watchfiles
-ruamel.yaml
-pydantic
-pyjwt
-openai
-boto3
-minio
-pyperclip
+# WeChat-AI Bot Python deps for the Docker image (Python 3.12 venv).
+#
+# Docker passes --find-links for CPU PyTorch wheels. Keep torch/torchvision
+# pinned here so ultralytics does not pull CUDA-enabled PyPI wheels.
+torch==2.7.1+cpu; platform_system == "Linux" and platform_machine == "x86_64"
+torch==2.7.1+cpu; platform_system == "Linux" and platform_machine == "aarch64"
+torchvision==0.22.1+cpu; platform_system == "Linux" and platform_machine == "x86_64"
+torchvision==0.22.1; platform_system == "Linux" and platform_machine == "aarch64"
+
+pyautogui==0.9.54
+ultralytics==8.3.161
+fastmcp==2.10.1
+paho-mqtt==2.1.0
+protobuf==6.31.1
+aiohttp==3.12.13
+aiofiles>=25.1.0
+cryptography>=46.0.0
+lxml==6.0.0
+minio==7.2.15
+mss==10.0.0
+fuzzywuzzy==0.18.0
+xmltodict==0.14.2
+zstandard==0.23.0
+rapidocr==3.2.0
+python-Levenshtein==0.27.1
+watchfiles==1.1.0
+onnxruntime==1.22.0
+ruamel.yaml==0.18.14
+pydantic==2.11.7
+pyjwt==2.10.1
+openai==1.93.0
+boto3==1.39.3
+pyperclip==1.8.2
+python-xlib==0.33
+Pillow>=10.0.0
+requests==2.34.2
+opencv-python==4.13.0.92

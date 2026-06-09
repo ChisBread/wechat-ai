@@ -43,7 +43,7 @@ class ProcessorService:
         self.message_event = threading.Event()
 
         # 初始化配置
-        thread_pool_size = multiprocessing.cpu_count() - 1
+        thread_pool_size = max(1, multiprocessing.cpu_count() - 1)
         self.logger.info(f"CPU线程数量: {thread_pool_size}")
         # 初始化消息处理线程池
         self.thread_pool = ThreadPoolExecutor(max_workers=thread_pool_size)
@@ -103,7 +103,7 @@ class ProcessorService:
         self.logger.info("发布器已停止")
         return True
 
-    def _process_message(self, message: tuple):
+    def _process_message(self, message):
         """
         处理单条消息的方法。
         核心改动：不再直接处理，而是提交给异步执行器。
@@ -123,8 +123,11 @@ class ProcessorService:
         except Exception as e:
             self.logger.error(f"准备消息并提交给异步执行器时出错: {e}", exc_info=True)
 
-    def _get_session_id(self, message: tuple) -> str:
+    def _get_session_id(self, message) -> str:
         """获取会话ID"""
+        if isinstance(message, dict):
+            return message.get("session_id") or message.get("target") or "visual_current"
+
         table_name, msg_with_db = message
         # 如果是群消息，使用群ID作为会话ID
         if table_name.startswith("Msg_"):

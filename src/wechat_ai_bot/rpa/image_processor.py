@@ -77,7 +77,7 @@ class ImageProcessor:
         """
         return (random.randint(0, 150), random.randint(0, 150), random.randint(0, 150))
 
-    def detect_objects(self, image: Image.Image) -> List[Dict]:
+    def detect_objects(self, image: Image.Image, imgsz: int = 640) -> List[Dict]:
         """
         检测图像中的对象。
         Args:
@@ -89,7 +89,8 @@ class ImageProcessor:
             self.logger.error("YOLO 模型未加载")
             return []
         try:
-            results = self.yolo(image)
+            self.logger.debug("YOLO input image size: %sx%s, imgsz=%s", image.width, image.height, imgsz)
+            results = self.yolo(image, imgsz=imgsz)
             detections = []
             for result in results:
                 boxes = result.boxes
@@ -117,54 +118,54 @@ class ImageProcessor:
         self, region: Tuple[int, int, int, int], save_path: Optional[str] = None
     ) -> Optional[Image.Image]:
         """
-        Take screenshot (Wayland via grim, X11 via mss fallback).
+        Take screenshot (X11 via mss, Wayland/grim fallback).
         Args:
-            region (Tuple[int, int, int, int]): Region (left, top, right, bottom).
+            region (Tuple[int, int, int, int]): Region (left, top, width, height).
             save_path (Optional[str]): Save path.
         Returns:
             Optional[Image.Image]: Screenshot image.
         """
+        if region is None:
+            raise ValueError("Region cannot be None")
+        left, top, width, height = [int(v) for v in region]
+        if width <= 0 or height <= 0:
+            raise ValueError(f"Invalid screenshot region: {region}")
+
         try:
-            if region is None:
-                raise ValueError("Region cannot be None")
-            left, top, right, bottom = region[0], region[1], region[2], region[3]
-
-            # Try Wayland grim first
-            try:
-                import subprocess, tempfile, os
-                tmp = tempfile.mktemp(suffix=".png")
-                env = {**os.environ, "XDG_RUNTIME_DIR": "/config/.XDG"}
-                subprocess.run(
-                    ["grim", "-g", f"{left},{top} {right-left}x{bottom-top}", tmp],
-                    timeout=5, capture_output=True, check=True, env=env
-                )
-                img = Image.open(tmp)
-                os.unlink(tmp)
-                if save_path:
-                    img.save(save_path)
-                return img
-            except Exception:
-                pass
-
-            # Fallback to mss (X11)
             with mss.mss() as sct:
                 monitor = {
                     "left": left,
                     "top": top,
-                    "width": right - left,
-                    "height": bottom - top,
+                    "width": width,
+                    "height": height,
                 }
                 screenshot = sct.grab(monitor)
                 img = Image.frombytes(
                     "RGB", screenshot.size, screenshot.bgra, "raw", "BGRX"
                 )
                 if save_path:
+                    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
                     img.save(save_path)
                 return img
-        except Exception as e:
-            self.logger.error(f"Screenshot error: {e}")
-            return None
-            return None
+        except Exception as x11_error:
+            try:
+                import subprocess
+                import tempfile
+                tmp = tempfile.mktemp(suffix=".png")
+                env = {**os.environ, "XDG_RUNTIME_DIR": os.environ.get("XDG_RUNTIME_DIR", "/config/.XDG")}
+                subprocess.run(
+                    ["grim", "-g", f"{left},{top} {width}x{height}", tmp],
+                    timeout=5, capture_output=True, check=True, env=env
+                )
+                img = Image.open(tmp)
+                os.unlink(tmp)
+                if save_path:
+                    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+                    img.save(save_path)
+                return img
+            except Exception as e:
+                self.logger.error(f"Screenshot error: {x11_error}; grim fallback: {e}")
+                return None
 
     def draw_boxes_on_screen(
         self,

@@ -22,7 +22,7 @@ class LinuxInputHandler:
         self.action_delay = action_delay
 
     def move_mouse(self, x: int, y: int, duration: float = 0.1):
-        human_like_mouse_move(target_x=x, target_y=y)
+        human_like_mouse_move(target_x=x, target_y=y, min_duration=duration)
 
     def do_click(self, x: int = None, y: int = None, button: str = "left", clicks: int = 1):
         click(x, y, button, clicks)
