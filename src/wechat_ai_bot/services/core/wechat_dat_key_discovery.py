@@ -149,7 +149,8 @@ class WeChatDatKeyDiscovery:
                 dat_path=dat_path,
                 dat_bytes=dat_bytes,
                 plain_bytes=probe_bytes,
-                aes_size=info.aes_size,
+                aes_size=info.encrypted_aes_size,
+                plain_aes_size=info.aes_size,
                 xor_key=result.xor_key,
             )
             if aes_result.xor_key is not None and result.xor_key is None:
@@ -158,7 +159,8 @@ class WeChatDatKeyDiscovery:
                 scan_result = self._scan_aes_key(
                     dat_bytes=dat_bytes,
                     plain_bytes=probe_bytes,
-                    aes_size=info.aes_size,
+                    aes_size=info.encrypted_aes_size,
+                    plain_aes_size=info.aes_size,
                     timeout_seconds=scan_timeout_seconds,
                 )
                 aes_result = _merge_aes_results(aes_result, scan_result)
@@ -260,7 +262,7 @@ class WeChatDatKeyDiscovery:
                 info = parse_dat_file(path)
                 if not info:
                     continue
-                decoded_size = info.aes_size + info.xor_size
+                decoded_size = info.payload_size
                 if decoded_size != plain_len:
                     continue
                 best.append((path.stat().st_mtime, path))
@@ -303,10 +305,11 @@ class WeChatDatKeyDiscovery:
         dat_bytes: bytes,
         plain_bytes: bytes,
         aes_size: int,
+        plain_aes_size: int,
         xor_key: int | None = None,
     ) -> "_AesScanResult":
         encrypted = dat_bytes[DAT_HEADER_SIZE : DAT_HEADER_SIZE + aes_size]
-        expected_plain = plain_bytes[:aes_size]
+        expected_plain = plain_bytes[:plain_aes_size]
         result = _AesScanResult(scan_methods=["kvcomm_derive"])
         account_name = _account_name_from_path(self.xwechat_root, dat_path)
         if not account_name:
@@ -330,6 +333,7 @@ class WeChatDatKeyDiscovery:
         dat_bytes: bytes,
         plain_bytes: bytes,
         aes_size: int,
+        plain_aes_size: int,
         timeout_seconds: float,
     ) -> "_AesScanResult":
         scanner = _DatAesKeyScanner(
@@ -340,7 +344,7 @@ class WeChatDatKeyDiscovery:
         )
         return scanner.scan(
             encrypted=dat_bytes[DAT_HEADER_SIZE : DAT_HEADER_SIZE + aes_size],
-            expected_plain=plain_bytes[:aes_size],
+            expected_plain=plain_bytes[:plain_aes_size],
             timeout_seconds=timeout_seconds,
         )
 
@@ -692,10 +696,8 @@ def derive_dat_key_for_file(
     if info is None:
         return None
     data = dat_path.read_bytes()
-    inferred_xor = xor_key
-    if inferred_xor is None or int(inferred_xor) < 0:
-        inferred_xor = infer_xor_key(data, info)
-    encrypted = data[DAT_HEADER_SIZE : DAT_HEADER_SIZE + info.aes_size]
+    inferred_xor = xor_key if xor_key is not None and int(xor_key) >= 0 else None
+    encrypted = data[DAT_HEADER_SIZE : DAT_HEADER_SIZE + info.encrypted_aes_size]
     account_name = _account_name_from_path(root, dat_path)
     if not account_name:
         return None
@@ -841,22 +843,18 @@ def _aes_ecb_matches(key: bytes, encrypted: bytes, expected_plain: bytes) -> boo
         return False
     if not encrypted or len(encrypted) % 16 != 0:
         return False
-    if len(expected_plain) < len(encrypted):
-        return False
-    if len(encrypted) >= 16:
-        try:
-            decryptor = Cipher(algorithms.AES(key), modes.ECB()).decryptor()
-            first = decryptor.update(encrypted[:16]) + decryptor.finalize()
-        except Exception:
-            return False
-        if first != expected_plain[:16]:
-            return False
     try:
         decryptor = Cipher(algorithms.AES(key), modes.ECB()).decryptor()
         plain = decryptor.update(encrypted) + decryptor.finalize()
     except Exception:
         return False
-    return plain == expected_plain[: len(encrypted)]
+    try:
+        pad = plain[-1]
+    except IndexError:
+        return False
+    if 1 <= pad <= 16 and plain[-pad:] == bytes([pad]) * pad:
+        plain = plain[:-pad]
+    return plain == expected_plain
 
 
 def _dat_key_matches_image_magic(key: bytes, encrypted: bytes) -> bool:

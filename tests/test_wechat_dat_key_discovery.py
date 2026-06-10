@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from tempfile import TemporaryDirectory
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import padding
 
 from wechat_ai_bot.services.core.wechat_dat_key_discovery import (
     _AesScanResult,
@@ -17,14 +18,24 @@ from wechat_ai_bot.services.core.wechat_dat_key_discovery import (
 from wechat_ai_bot.services.core.wechat_dat import DAT_V2_SIGNATURE, parse_dat_file
 
 
-def make_dat_from_plain(plain: bytes, key: bytes = b"0123456789abcdef", xor_key: int = 60) -> bytes:
-    prefix = plain[:1024]
-    suffix = plain[1024:]
+def make_dat_from_plain(
+    plain: bytes,
+    key: bytes = b"0123456789abcdef",
+    xor_key: int = 60,
+    aes_size: int = 1024,
+    xor_size: int | None = None,
+) -> bytes:
+    if xor_size is None:
+        xor_size = max(0, len(plain) - aes_size)
+    prefix = plain[:aes_size]
+    raw = plain[aes_size : len(plain) - xor_size]
+    suffix = plain[len(plain) - xor_size :]
+    padder = padding.PKCS7(128).padder()
+    padded_prefix = padder.update(prefix) + padder.finalize()
     encryptor = Cipher(algorithms.AES(key), modes.ECB()).encryptor()
-    encrypted = encryptor.update(prefix) + encryptor.finalize()
-    header = struct.pack("<6sLLx", DAT_V2_SIGNATURE, len(encrypted), len(suffix))
-    xor_prefix = bytes(byte ^ xor_key for byte in b"PADDING-PREFIX!!")
-    return header + encrypted + xor_prefix + bytes(byte ^ xor_key for byte in suffix)
+    encrypted = encryptor.update(padded_prefix) + encryptor.finalize()
+    header = struct.pack("<6sLLx", DAT_V2_SIGNATURE, aes_size, xor_size)
+    return header + encrypted + raw + bytes(byte ^ xor_key for byte in suffix)
 
 
 LINUX_PROBE_PNG = _generate_probe_png(974999100)
@@ -134,6 +145,31 @@ class WeChatDatKeyDiscoveryTest(unittest.TestCase):
             self.assertEqual(derived.config_value, "765a3ffda1280704")
             self.assertEqual(derived.xor_key, 60)
             self.assertEqual(derived.account_name, "RM616319889")
+
+    def test_derive_dat_key_for_wxgf_does_not_require_inferred_xor(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "xwechat_files"
+            img_dir = root / "RM616319889_7b2d" / "msg" / "attach" / "filehelper" / "2026-06" / "Img"
+            img_dir.mkdir(parents=True)
+            kvcomm = Path(tmp) / ".xwechat" / "net" / "kvcomm"
+            kvcomm.mkdir(parents=True)
+            (kvcomm / "key_974999100_4067692804_1_1_1_3600_input.statistic").write_text("")
+            dat_path = img_dir / "image_h.dat"
+            dat_path.write_bytes(
+                make_dat_from_plain(
+                    b"wxgf" + b"\0" * 2048,
+                    key=b"765a3ffda1280704",
+                    xor_key=60,
+                    aes_size=32,
+                    xor_size=16,
+                )
+            )
+
+            derived = derive_dat_key_for_file(dat_path, xwechat_root=root)
+
+            self.assertIsNotNone(derived)
+            self.assertEqual(derived.config_value, "765a3ffda1280704")
+            self.assertEqual(derived.xor_key, 60)
 
     def test_discover_derives_linux_kvcomm_aes_key(self):
         with TemporaryDirectory() as tmp:

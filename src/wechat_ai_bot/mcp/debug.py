@@ -1329,6 +1329,30 @@ def _dashboard_dat_media_response(
     try:
         result = decrypt_dat_file(file_path, aes_key=dat_key, xor_key=dat_xor_key)
     except WeChatDatError as exc:
+        if inferred_xor_key is not None and inferred_xor_key != dat_xor_key:
+            try:
+                result = decrypt_dat_file(
+                    file_path,
+                    aes_key=dat_key,
+                    xor_key=inferred_xor_key,
+                )
+            except WeChatDatError:
+                pass
+            else:
+                _update_dat_runtime_keys(
+                    user_info=user_info,
+                    config=config or getattr(bot, "config", None),
+                    aes_key=dat_key,
+                    xor_key=inferred_xor_key,
+                )
+                return _dat_media_binary_response(
+                    result,
+                    file_path=file_path,
+                    headers=headers,
+                    as_download=as_download,
+                    refreshed=False,
+                    inferred_xor=True,
+                )
         refreshed = _refresh_dat_key_for_media(
             file_path,
             info,
@@ -1353,6 +1377,7 @@ def _dashboard_dat_media_response(
                     headers=headers,
                     as_download=as_download,
                     refreshed=True,
+                    inferred_xor=False,
                 )
         return JSONResponse(
             {
@@ -1377,6 +1402,7 @@ def _dashboard_dat_media_response(
         headers=headers,
         as_download=as_download,
         refreshed=False,
+        inferred_xor=False,
     )
 
 
@@ -1387,6 +1413,7 @@ def _dat_media_binary_response(
     headers: dict[str, str],
     as_download: bool,
     refreshed: bool,
+    inferred_xor: bool,
 ) -> Any:
     from starlette.responses import Response
 
@@ -1403,6 +1430,8 @@ def _dat_media_binary_response(
     response.headers["X-WeChat-Dat-Version"] = result.info.version
     if refreshed:
         response.headers["X-WeChat-Dat-Key-Refreshed"] = "1"
+    if inferred_xor:
+        response.headers["X-WeChat-Dat-Xor-Inferred"] = "1"
     return response
 
 
@@ -1436,12 +1465,26 @@ def _refresh_dat_key_for_media(
         return None
     if not derived:
         return None
-    if user_info:
-        user_info.dat_key = derived.config_value
-        user_info.dat_xor_key = int(derived.xor_key)
-    config_target = config or getattr(bot, "config", None)
-    _persist_dat_key_config(config_target, derived.config_value, derived.xor_key)
+    _update_dat_runtime_keys(
+        user_info=user_info,
+        config=config or getattr(bot, "config", None),
+        aes_key=derived.config_value,
+        xor_key=derived.xor_key,
+    )
     return derived
+
+
+def _update_dat_runtime_keys(
+    *,
+    user_info: Any,
+    config: Any,
+    aes_key: str,
+    xor_key: int,
+) -> bool:
+    if user_info:
+        user_info.dat_key = aes_key
+        user_info.dat_xor_key = int(xor_key)
+    return _persist_dat_key_config(config, aes_key, xor_key)
 
 
 def _persist_dat_key_config(config: Any, aes_key: str, xor_key: int) -> bool:

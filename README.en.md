@@ -55,6 +55,9 @@ Media notes:
 - The database reader resolves local paths for images, videos, and files.
 - Linux WeChat 4.x image `.dat` files are detected and can be decrypted when
   `aes_xor_key` is configured as `AES-text-key,60` or `hex:<aes-key-hex>,60`.
+- DAT V2 is parsed as a PKCS7-padded AES-ECB prefix, an optional raw middle
+  segment, and an XOR tail. Common image formats are proxied directly; WeChat
+  `wxgf` payloads are returned as `video/hevc` / `.hevc`.
 - Without the image DAT AES key, Dashboard still shows message metadata and
   local paths, but `/dashboard/media` returns a JSON diagnostic instead of a
   broken image.
@@ -66,6 +69,10 @@ Media notes:
 - A successful discovery persists `aes_xor_key` in `config.yaml`. Dashboard
   normally reuses that cached key; if media decrypt fails later, it performs a
   local no-send `kvcomm` refresh before asking you to run a full probe again.
+- TODO: WeChat does not always download historical media until the GUI browses
+  or opens that message. The next media milestone is a controlled GUI download
+  queue that navigates to a message, triggers image/video/file download, waits
+  for local files, then retries the existing media parser.
 
 See [docs/mcp.md](docs/mcp.md). The MCP docs are Chinese-first but include the
 client configuration snippets needed for Claude Code and OpenClaw.

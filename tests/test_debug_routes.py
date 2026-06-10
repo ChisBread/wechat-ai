@@ -701,6 +701,38 @@ class DebugRoutesTest(unittest.TestCase):
         self.assertEqual(response.headers["content-type"], "image/png")
         self.assertTrue(response.content.startswith(b"\x89PNG\r\n\x1a\n"))
 
+    def test_dashboard_media_dat_recovers_stale_xor_key(self):
+        from starlette.testclient import TestClient
+
+        key = "0123456789abcdef"
+        plain = LONG_PNG_BYTES
+        config = DummyConfig({"debug": {"enabled": True}, "mcp": {"port": 8000}})
+        with TemporaryDirectory() as tmp, dashboard_auth_env():
+            root = Path(tmp)
+            image_dir = root / "msg" / "attach" / "alice" / "2026-06" / "Img"
+            image_dir.mkdir(parents=True)
+            dat_path = image_dir / "image.dat"
+            dat_path.write_bytes(make_dat(plain=plain, key=key.encode("utf-8"), xor_key=48))
+            user_info = UserInfo(account="me", dat_key=key, dat_xor_key=60)
+            app = create_app(
+                user_info,
+                config,
+                bot=DummyMediaBot(root, user_info=user_info),
+            )
+            client = TestClient(app.streamable_http_app())
+
+            response = client.get(
+                "/dashboard/media?path=msg/attach/alice/2026-06/Img/image.dat",
+                headers=dashboard_auth_headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/png")
+        self.assertEqual(response.headers["x-wechat-dat-xor-inferred"], "1")
+        self.assertEqual(response.content, plain)
+        self.assertEqual(user_info.dat_xor_key, 48)
+        self.assertEqual(config["aes_xor_key"], f"{key},48")
+
     def test_ported_write_tools_return_dry_run_payloads(self):
         app = create_app(
             UserInfo(account="me"),

@@ -205,14 +205,20 @@ bot 服务以 root 运行，是为了读取 `/proc/<wechat-pid>/mem`。微信、
 
 文本消息、联系人、群成员、文件/视频元数据主要来自数据库。图片消息会先解析本地 `.dat` 路径：
 
-- Linux 微信 4.x 图片 DAT 使用 `V2` 结构：`15 字节头 + AES 段 + 16 字节 XOR 前导 + XOR 图片尾部`。
-- 项目已经能识别 DAT 头、推断常见单字节 XOR key，并在配置了 AES key 时把图片解成 PNG/JPEG/GIF 返回给管理台。
+- Linux 微信 4.x 图片 DAT 使用 `V2` 结构：`15 字节头 + PKCS7 padding 后的 AES-ECB 前缀 + 可选 raw 中段 + XOR 尾部`。
+- 项目已经能识别 DAT 头、推断常见单字节 XOR key，并在配置了 AES key 时把图片解成 PNG/JPEG/GIF/WebP/BMP/TIFF 返回给管理台。
+- 微信的 `wxgf` 图片会解成 HEVC 裸流并以 `video/hevc` / `.hevc` 返回。浏览器不一定能直接预览，后续可以增加 HEVC 首帧转 JPEG 或 MP4 封装。
 - `aes_xor_key` 为空时仍可看到图片消息和本地路径，但浏览器不能直接显示加密图片；此时 `/dashboard/media` 会返回 JSON 诊断，提示缺少 DAT AES key。
 - `aes_xor_key` 格式为 `AES文本key,60`；如果你拿到的是十六进制原始 key，用 `hex:<hexkey>,60`。
 
 管理台顶部的“发现图片密钥”和 MCP 工具 `discover_dat_keys` 会自动生成 probe 图片、发送到文件传输助手、定位新生成的 `_h.dat`、推断 XOR key，并优先用 Linux 微信的 `kvcomm/key_<code>_*.statistic` 与账号目录派生 AES key。派生失败时会退回到 WeChat 相关进程内存扫描。
 
 发现成功后会自动写回 `aes_xor_key`，后续直接复用这个持久化 key。若某次媒体解密发现持久化 key 已失效，Dashboard 会先基于当前 DAT 和本地 `kvcomm` 做一次不发送消息的轻量刷新；仍失败时才需要手动点击“发现图片密钥”或调用 `discover_dat_keys(send_probe=true)` 重新发送 probe。
+
+后续 TODO：
+
+- 微信不会把所有历史图片、视频和文件立即落盘；很多媒体只有在 GUI 里浏览到对应消息、点开图片/视频或触发下载后，本地 `msg/attach`、`msg/video` 等目录才会出现完整文件。参考项目目前也没有完整解决：`omni-bot-sdk-oss` 的图片下载 handler 只是切会话并滚动，视频 handler 会点开可见视频，`wechat-decrypt` 只负责解析已经存在的本地 DAT/缓存。
+- 需要实现一个“媒体补全”队列：根据数据库定位消息和会话，驱动 GUI 切到对应聊天、滚动到目标消息、点击或预览媒体以触发微信下载，等待文件落盘后再走现有 DAT/文件解析链路。管理台可以给缺失媒体提供“触发下载/重试解析”按钮，MCP 可以提供受限的 `ensure_media_downloaded` 工具。
 
 ## 配置
 
