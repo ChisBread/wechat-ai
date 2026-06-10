@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-import io
+import base64
 import hashlib
+import hmac
+import io
 import os
 import platform
 import re
@@ -11,9 +13,11 @@ import subprocess
 import sys
 import time
 from datetime import datetime
+from mimetypes import guess_type
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any
+from urllib.parse import quote
 
 from PIL import Image, ImageDraw
 
@@ -21,46 +25,59 @@ from wechat_ai_bot.common.queues import get_queue_stats
 from wechat_ai_bot.services.core.linux_database_discovery import LinuxDatabaseDiscovery
 
 
+_DASHBOARD_USERNAME_ENV = "WECHAT_AI_DASHBOARD_USERNAME"
+_DASHBOARD_PASSWORD_ENV = "WECHAT_AI_DASHBOARD_PASSWORD"
+_DEFAULT_DASHBOARD_USERNAME = "wechat"
+_DEFAULT_DASHBOARD_PASSWORD = "wechat"
+_DASHBOARD_AUTH_REALM = "WeChat-AI Dashboard"
+_DASHBOARD_MUTATION_HEADER = "x-wechat-ai-dashboard"
+
+
 def register_debug_routes(mcp: Any, bot: Any, config: Any) -> None:
     """Register manager routes on a FastMCP instance."""
     from starlette.requests import Request
-    from starlette.responses import RedirectResponse, Response
+    from starlette.responses import Response
 
     @mcp.custom_route("/dashboard", methods=["GET"], include_in_schema=False)
     async def dashboard_page(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
         return Response(_dashboard_html(), media_type="text/html; charset=utf-8")
 
     @mcp.custom_route("/dashboard/", methods=["GET"], include_in_schema=False)
     async def dashboard_page_slash(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
         return Response(_dashboard_html(), media_type="text/html; charset=utf-8")
 
-    # Backward compatibility for older local links.
-    @mcp.custom_route("/debug", methods=["GET"], include_in_schema=False)
-    async def debug_page(request: Request) -> Response:
-        return RedirectResponse(url="/dashboard", status_code=307)
-
-    @mcp.custom_route("/debug/", methods=["GET"], include_in_schema=False)
-    async def debug_page_slash(request: Request) -> Response:
-        return RedirectResponse(url="/dashboard", status_code=307)
-
-    for prefix in ("/dashboard", "/debug"):
-        _register_dashboard_api_routes(mcp, bot, config, prefix)
+    _register_dashboard_api_routes(mcp, bot, config, "/dashboard")
 
 
 def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str) -> None:
     from starlette.requests import Request
-    from starlette.responses import JSONResponse, PlainTextResponse, Response
+    from starlette.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 
     @mcp.custom_route(f"{prefix}/api/status", methods=["GET"], include_in_schema=False)
-    async def debug_status(request: Request) -> JSONResponse:
+    async def debug_status(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
         show_sensitive = _parse_bool(
             request.query_params.get("show_sensitive"),
-            default=_parse_bool(_config_get(config, "debug.show_sensitive", True), default=True),
+            default=_parse_bool(_config_get(config, "debug.show_sensitive", False), default=False),
         )
         return JSONResponse(build_debug_status(bot, config, show_sensitive=show_sensitive))
 
     @mcp.custom_route(f"{prefix}/api/database/rescan", methods=["POST"], include_in_schema=False)
-    async def debug_database_rescan(request: Request) -> JSONResponse:
+    async def debug_database_rescan(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
+        mutation_response = _require_dashboard_mutation_header(request)
+        if mutation_response is not None:
+            return mutation_response
         database_service = getattr(bot, "database_service", None)
         if not database_service or not hasattr(database_service, "refresh"):
             return JSONResponse({"ok": False, "error": "database service unavailable"}, status_code=503)
@@ -74,7 +91,13 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
             )
 
     @mcp.custom_route(f"{prefix}/api/message/pause", methods=["POST"], include_in_schema=False)
-    async def debug_message_pause(request: Request) -> JSONResponse:
+    async def debug_message_pause(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
+        mutation_response = _require_dashboard_mutation_header(request)
+        if mutation_response is not None:
+            return mutation_response
         message_service = getattr(bot, "message_service", None)
         if not message_service or not hasattr(message_service, "pause"):
             return JSONResponse({"ok": False, "error": "message service unavailable"}, status_code=503)
@@ -82,7 +105,13 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         return JSONResponse({"ok": True, "message": _call_status(message_service)})
 
     @mcp.custom_route(f"{prefix}/api/message/resume", methods=["POST"], include_in_schema=False)
-    async def debug_message_resume(request: Request) -> JSONResponse:
+    async def debug_message_resume(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
+        mutation_response = _require_dashboard_mutation_header(request)
+        if mutation_response is not None:
+            return mutation_response
         message_service = getattr(bot, "message_service", None)
         if not message_service or not hasattr(message_service, "resume"):
             return JSONResponse({"ok": False, "error": "message service unavailable"}, status_code=503)
@@ -90,7 +119,13 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         return JSONResponse({"ok": True, "message": _call_status(message_service)})
 
     @mcp.custom_route(f"{prefix}/api/window/reset", methods=["POST"], include_in_schema=False)
-    async def debug_window_reset(request: Request) -> JSONResponse:
+    async def debug_window_reset(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
+        mutation_response = _require_dashboard_mutation_header(request)
+        if mutation_response is not None:
+            return mutation_response
         window_manager = getattr(bot, "window_manager", None)
         if not window_manager:
             return JSONResponse({"ok": False, "error": "window manager unavailable"}, status_code=503)
@@ -110,7 +145,10 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         )
 
     @mcp.custom_route(f"{prefix}/api/contacts", methods=["GET"], include_in_schema=False)
-    async def debug_contacts(request: Request) -> JSONResponse:
+    async def debug_contacts(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
         database_service = getattr(bot, "database_service", None)
         if not database_service or not getattr(database_service, "is_available", False):
             return JSONResponse({"ok": False, "error": "database service unavailable"}, status_code=503)
@@ -132,7 +170,10 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         )
 
     @mcp.custom_route(f"{prefix}/api/chats", methods=["GET"], include_in_schema=False)
-    async def debug_chats(request: Request) -> JSONResponse:
+    async def debug_chats(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
         database_service = getattr(bot, "database_service", None)
         if not database_service or not getattr(database_service, "is_available", False):
             return JSONResponse({"ok": False, "error": "database service unavailable"}, status_code=503)
@@ -158,7 +199,10 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         )
 
     @mcp.custom_route(f"{prefix}/api/contact/detail", methods=["GET"], include_in_schema=False)
-    async def debug_contact_detail(request: Request) -> JSONResponse:
+    async def debug_contact_detail(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
         database_service = getattr(bot, "database_service", None)
         if not database_service or not getattr(database_service, "is_available", False):
             return JSONResponse({"ok": False, "error": "database service unavailable"}, status_code=503)
@@ -189,7 +233,10 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         )
 
     @mcp.custom_route(f"{prefix}/api/messages", methods=["GET"], include_in_schema=False)
-    async def debug_messages(request: Request) -> JSONResponse:
+    async def debug_messages(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
         database_service = getattr(bot, "database_service", None)
         if not database_service or not getattr(database_service, "is_available", False):
             return JSONResponse({"ok": False, "error": "database service unavailable"}, status_code=503)
@@ -228,7 +275,10 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         )
 
     @mcp.custom_route(f"{prefix}/api/messages/recent", methods=["GET"], include_in_schema=False)
-    async def debug_recent_messages(request: Request) -> JSONResponse:
+    async def debug_recent_messages(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
         database_service = getattr(bot, "database_service", None)
         if not database_service or not getattr(database_service, "is_available", False):
             return JSONResponse({"ok": False, "error": "database service unavailable"}, status_code=503)
@@ -265,7 +315,10 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         )
 
     @mcp.custom_route(f"{prefix}/api/messages/media", methods=["GET"], include_in_schema=False)
-    async def debug_media_messages(request: Request) -> JSONResponse:
+    async def debug_media_messages(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
         database_service = getattr(bot, "database_service", None)
         if not database_service or not getattr(database_service, "is_available", False):
             return JSONResponse({"ok": False, "error": "database service unavailable"}, status_code=503)
@@ -301,7 +354,13 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         )
 
     @mcp.custom_route(f"{prefix}/api/rpa/send_text", methods=["POST"], include_in_schema=False)
-    async def debug_rpa_send_text(request: Request) -> JSONResponse:
+    async def debug_rpa_send_text(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
+        mutation_response = _require_dashboard_mutation_header(request)
+        if mutation_response is not None:
+            return mutation_response
         try:
             payload = await request.json()
         except Exception:
@@ -374,7 +433,13 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         )
 
     @mcp.custom_route(f"{prefix}/api/rpa/action", methods=["POST"], include_in_schema=False)
-    async def debug_rpa_action(request: Request) -> JSONResponse:
+    async def debug_rpa_action(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
+        mutation_response = _require_dashboard_mutation_header(request)
+        if mutation_response is not None:
+            return mutation_response
         try:
             payload = await request.json()
         except Exception:
@@ -417,7 +482,10 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         )
 
     @mcp.custom_route(f"{prefix}/api/logs", methods=["GET"], include_in_schema=False)
-    async def debug_logs(request: Request) -> JSONResponse:
+    async def debug_logs(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
         try:
             lines = int(request.query_params.get("lines", "160"))
         except ValueError:
@@ -433,19 +501,110 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
             }
         )
 
+    @mcp.custom_route(f"{prefix}/media", methods=["GET"], include_in_schema=False)
+    async def debug_media(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
+        database_service = getattr(bot, "database_service", None)
+        raw_path = str(request.query_params.get("path", "")).strip()
+        file_path = _resolve_dashboard_media_path(database_service, raw_path)
+        if not file_path:
+            return PlainTextResponse("media not found", status_code=404)
+        headers = {"Cache-Control": "private, max-age=300"}
+        response = FileResponse(
+            file_path,
+            media_type=_guess_file_media_type(file_path),
+            headers=headers,
+        )
+        disposition = "attachment" if _parse_bool(request.query_params.get("download"), default=False) else "inline"
+        response.headers["Content-Disposition"] = _content_disposition(disposition, file_path.name)
+        return response
+
     @mcp.custom_route(f"{prefix}/layout.png", methods=["GET"], include_in_schema=False)
     async def debug_layout(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
         png = build_layout_png(bot)
         return Response(png, media_type="image/png")
 
     @mcp.custom_route(f"{prefix}/raw-screenshot.png", methods=["GET"], include_in_schema=False)
     async def debug_raw_screenshot(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
         if not bool(_config_get(config, "debug.allow_raw_screenshot", False)):
             return PlainTextResponse("raw screenshot is disabled", status_code=403)
         png = build_raw_screenshot_png(bot)
         if not png:
             return PlainTextResponse("screenshot unavailable", status_code=503)
         return Response(png, media_type="image/png")
+
+
+def _require_dashboard_auth(request: Any) -> Any | None:
+    username, password, configured = _dashboard_credentials()
+    if not configured:
+        return _dashboard_unauthorized(
+            "Dashboard credentials are not configured. Set "
+            f"{_DASHBOARD_USERNAME_ENV} and {_DASHBOARD_PASSWORD_ENV}; "
+            f"the default {_DEFAULT_DASHBOARD_USERNAME}/{_DEFAULT_DASHBOARD_PASSWORD} is disabled."
+        )
+
+    header = str(request.headers.get("authorization", "") or "")
+    prefix = "basic "
+    if not header.lower().startswith(prefix):
+        return _dashboard_unauthorized("Dashboard authentication required.")
+
+    token = header[len(prefix):].strip()
+    try:
+        decoded = base64.b64decode(token, validate=True).decode("utf-8")
+    except Exception:
+        return _dashboard_unauthorized("Invalid dashboard credentials.")
+    supplied_username, separator, supplied_password = decoded.partition(":")
+    if not separator:
+        return _dashboard_unauthorized("Invalid dashboard credentials.")
+    if (
+        _constant_time_equal(supplied_username, username)
+        and _constant_time_equal(supplied_password, password)
+    ):
+        return None
+    return _dashboard_unauthorized("Invalid dashboard credentials.")
+
+
+def _dashboard_credentials() -> tuple[str, str, bool]:
+    username = os.environ.get(_DASHBOARD_USERNAME_ENV, _DEFAULT_DASHBOARD_USERNAME)
+    password = os.environ.get(_DASHBOARD_PASSWORD_ENV, _DEFAULT_DASHBOARD_PASSWORD)
+    username = str(username or "")
+    password = str(password or "")
+    configured = bool(username and password)
+    configured = configured and not (
+        username == _DEFAULT_DASHBOARD_USERNAME
+        and password == _DEFAULT_DASHBOARD_PASSWORD
+    )
+    return username, password, configured
+
+
+def _dashboard_unauthorized(message: str) -> Any:
+    from starlette.responses import PlainTextResponse
+
+    response = PlainTextResponse(message, status_code=401)
+    response.headers["WWW-Authenticate"] = f'Basic realm="{_DASHBOARD_AUTH_REALM}", charset="UTF-8"'
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _require_dashboard_mutation_header(request: Any) -> Any | None:
+    from starlette.responses import PlainTextResponse
+
+    value = str(request.headers.get(_DASHBOARD_MUTATION_HEADER, "") or "")
+    if value == "1":
+        return None
+    return PlainTextResponse("dashboard mutation header is required", status_code=403)
+
+
+def _constant_time_equal(left: str, right: str) -> bool:
+    return hmac.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
 
 
 def build_debug_status(
@@ -711,6 +870,8 @@ def _contact_payload(contact: Any) -> dict[str, Any]:
     if not contact:
         return {}
     username = str(getattr(contact, "username", "") or "")
+    small_head_url = str(getattr(contact, "small_head_url", "") or "")
+    big_head_url = str(getattr(contact, "big_head_url", "") or "")
     return {
         "id": getattr(contact, "id", None),
         "username": username,
@@ -722,6 +883,9 @@ def _contact_payload(contact: Any) -> dict[str, Any]:
         "local_type": getattr(contact, "local_type", None),
         "room_remark": str(getattr(contact, "room_remark", "") or ""),
         "description": str(getattr(contact, "description", "") or ""),
+        "small_head_url": small_head_url,
+        "big_head_url": big_head_url,
+        "avatar_url": small_head_url or big_head_url,
         "head_img_md5": str(getattr(contact, "head_img_md5", "") or ""),
         "delete_flag": getattr(contact, "delete_flag", None),
         "verify_flag": getattr(contact, "verify_flag", None),
@@ -792,6 +956,7 @@ def _rich_message_payload(
         sender = database_service.get_contact_by_sender_id(sender_id, db_path)
     except Exception:
         sender = None
+    sender_payload = _contact_payload(sender) if sender else {}
     upload_status = row[7] if len(row) > 7 else None
     current_account = getattr(getattr(database_service, "user_info", None), "account", "")
     direction = "out" if bool(
@@ -807,8 +972,10 @@ def _rich_message_payload(
         "status": row[6] if len(row) > 6 else None,
         "upload_status": upload_status,
         "download_status": row[8] if len(row) > 8 else None,
-        "sender_username": getattr(sender, "username", "") if sender else "",
-        "sender_display": getattr(sender, "display_name", "") if sender else "",
+        "sender": sender_payload,
+        "sender_username": sender_payload.get("username", ""),
+        "sender_display": sender_payload.get("display_name", ""),
+        "sender_avatar_url": sender_payload.get("avatar_url", ""),
         "contact_username": getattr(contact, "username", "") if contact else "",
         "contact_display": getattr(contact, "display_name", "") if contact else "",
         "create_time": row[5] if len(row) > 5 else None,
@@ -828,6 +995,7 @@ def _rich_message_payload(
     payload.update(media_payload)
     if not payload.get("text"):
         payload["text"] = media_payload.get("raw_content") or media_payload.get("factory_error") or f"[{payload['type_name']}]"
+    _add_media_urls(payload)
     return payload
 
 
@@ -865,15 +1033,209 @@ def _factory_message_payload(factory_service: Any, table_name: str, row: tuple) 
 
     payload["factory_ok"] = True
     payload["text"] = _message_text(message)
-    payload["sender_display"] = getattr(getattr(message, "contact", None), "display_name", "")
-    payload["room_display"] = getattr(getattr(message, "room", None), "display_name", "")
-    for key in ("path", "thumb_path", "file_name", "file_size", "file_type", "md5", "duration"):
+    sender_payload = _contact_payload(getattr(message, "contact", None))
+    room_payload = _contact_payload(getattr(message, "room", None))
+    payload["sender"] = sender_payload
+    payload["sender_display"] = sender_payload.get("display_name", "")
+    payload["sender_avatar_url"] = sender_payload.get("avatar_url", "")
+    payload["room"] = room_payload
+    payload["room_display"] = room_payload.get("display_name", "")
+    message_json: dict[str, Any] = {}
+    try:
+        raw_json = message.to_json()
+        if isinstance(raw_json, dict):
+            message_json = {
+                key: value
+                for key, value in raw_json.items()
+                if not isinstance(value, (bytes, bytearray))
+            }
+    except Exception:
+        message_json = {}
+    if message_json:
+        payload["message"] = message_json
+        for key in (
+            "url",
+            "title",
+            "description",
+            "desc",
+            "cover_url",
+            "cover_path",
+            "thumb_url",
+            "app_logo",
+            "app_name",
+            "app_id",
+            "publisher_nickname",
+            "publisher_avatar",
+            "nickname",
+            "alias",
+            "username",
+            "small_head_url",
+            "big_head_url",
+            "province",
+            "city",
+            "sex",
+            "sign",
+            "open_im_desc",
+            "open_im_desc_icon",
+            "x",
+            "y",
+            "label",
+            "poiname",
+            "scale",
+            "voice_to_text",
+            "display_content",
+            "invite_type",
+            "pay_memo",
+            "fee_desc",
+            "receiver_username",
+            "pay_subtype",
+            "media_count",
+            "width",
+            "height",
+        ):
+            if key in message_json and message_json[key] not in (None, ""):
+                payload[key] = message_json[key]
+    for key in (
+        "path",
+        "thumb_path",
+        "cover_path",
+        "file_name",
+        "file_size",
+        "file_type",
+        "md5",
+        "raw_md5",
+        "duration",
+        "url",
+        "thumb_url",
+    ):
         if hasattr(message, key):
             value = getattr(message, key)
             if isinstance(value, (bytes, bytearray)):
                 continue
             payload[key] = str(value) if isinstance(value, Path) else value
+    _add_media_urls(payload)
     return payload
+
+
+def _add_media_urls(payload: dict[str, Any]) -> None:
+    for key in ("path", "thumb_path", "cover_path"):
+        value = str(payload.get(key) or "")
+        if not value:
+            continue
+        payload[f"{key}_url"] = _media_url(value)
+    if payload.get("path_url"):
+        payload["media_url"] = payload["path_url"]
+    elif payload.get("cover_path_url"):
+        payload["media_url"] = payload["cover_path_url"]
+    elif payload.get("thumb_path_url"):
+        payload["media_url"] = payload["thumb_path_url"]
+    elif payload.get("thumb_url"):
+        payload["media_url"] = _media_url(str(payload["thumb_url"]))
+    size_value = payload.get("file_size")
+    if size_value not in (None, ""):
+        payload["file_size_label"] = _format_file_size(size_value)
+
+
+def _media_url(path_or_url: str) -> str:
+    if not path_or_url:
+        return ""
+    if re.match(r"^https?://", path_or_url, flags=re.IGNORECASE):
+        return path_or_url
+    return f"/dashboard/media?path={quote(path_or_url)}"
+
+
+def _format_file_size(value: Any) -> str:
+    try:
+        size = int(float(value or 0))
+    except (TypeError, ValueError):
+        return str(value or "")
+    units = ("B", "KB", "MB", "GB", "TB")
+    number = float(size)
+    unit = units[0]
+    for unit in units:
+        if number < 1024 or unit == units[-1]:
+            break
+        number /= 1024
+    if unit == "B":
+        return f"{int(number)} {unit}"
+    return f"{number:.2f} {unit}"
+
+
+def _resolve_dashboard_media_path(database_service: Any, raw_path: str) -> Path | None:
+    if not raw_path or "\x00" in raw_path or re.match(r"^https?://", raw_path, flags=re.IGNORECASE):
+        return None
+    candidate = Path(raw_path)
+    allowed_roots = _dashboard_media_roots(database_service)
+    candidates: list[Path] = [candidate] if candidate.is_absolute() else []
+    for root in allowed_roots:
+        if not candidate.is_absolute():
+            candidates.append(root / candidate)
+    for item in candidates:
+        try:
+            resolved = item.resolve()
+        except OSError:
+            continue
+        if not resolved.is_file():
+            continue
+        if any(_is_relative_to(resolved, root) for root in allowed_roots):
+            return resolved
+    return None
+
+
+def _dashboard_media_roots(database_service: Any) -> list[Path]:
+    roots: list[Path] = []
+    primary = getattr(database_service, "_primary_account", None)
+    for value in (
+        getattr(primary, "account_dir", None),
+        getattr(primary, "db_storage_dir", None),
+        getattr(database_service, "root", None),
+        "/config/xwechat_files",
+    ):
+        if not value:
+            continue
+        try:
+            path = Path(value).resolve()
+        except OSError:
+            continue
+        if path not in roots:
+            roots.append(path)
+    return roots
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _guess_file_media_type(path: Path) -> str:
+    media_type, _encoding = guess_type(str(path))
+    if media_type and media_type != "application/octet-stream":
+        return media_type
+    try:
+        with Image.open(path) as image:
+            if image.format and image.format in Image.MIME:
+                return Image.MIME[image.format]
+    except Exception:
+        pass
+    suffix = path.suffix.lower()
+    if suffix in {".mp4", ".m4v"}:
+        return "video/mp4"
+    if suffix == ".webm":
+        return "video/webm"
+    if suffix == ".mp3":
+        return "audio/mpeg"
+    if suffix == ".wav":
+        return "audio/wav"
+    return media_type or "application/octet-stream"
+
+
+def _content_disposition(disposition: str, filename: str) -> str:
+    ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_", filename).strip("._") or "download"
+    utf8_name = quote(filename, safe="")
+    return f'{disposition}; filename="{ascii_name}"; filename*=UTF-8\'\'{utf8_name}'
 
 
 def _message_text(message: Any) -> str:

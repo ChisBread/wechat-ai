@@ -7,6 +7,7 @@ Adapted from omni-bot-sdk for Linux WeChat + SQLCipher DB access.
 
 import functools
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -32,6 +33,10 @@ from wechat_ai_bot.rpa.rpa_action import RPAActionType
 from wechat_ai_bot.weixin.message_classes import MessageType
 
 logger = logging.getLogger(__name__)
+
+_MCP_TOKEN_ENV = "WECHAT_AI_MCP_TOKEN"
+_DEFAULT_MCP_TOKEN = "wechat"
+_MCP_SCOPE = "wechat-ai"
 
 
 @dataclass
@@ -145,6 +150,39 @@ def _get_nested_config(config: Any, key: str, default: Any = None) -> Any:
     return default
 
 
+class EnvMcpTokenVerifier:
+    """Validate the MCP Bearer token from environment variables."""
+
+    async def verify_token(self, token: str) -> Any | None:
+        from mcp.server.auth.provider import AccessToken
+
+        expected = str(os.environ.get(_MCP_TOKEN_ENV, _DEFAULT_MCP_TOKEN) or "")
+        if not expected or expected == _DEFAULT_MCP_TOKEN:
+            return None
+        if not hmac.compare_digest(str(token or "").encode("utf-8"), expected.encode("utf-8")):
+            return None
+        return AccessToken(
+            token="env-token",
+            client_id="wechat-ai-local",
+            scopes=[_MCP_SCOPE],
+            subject="local-agent",
+        )
+
+
+def _mcp_auth_settings(config: Any) -> Any:
+    from mcp.server.auth.settings import AuthSettings
+
+    issuer_url = (
+        os.environ.get("WECHAT_AI_MCP_ISSUER_URL")
+        or _get_nested_config(config, "mcp.auth_issuer_url", "http://localhost:8000")
+    )
+    return AuthSettings(
+        issuer_url=issuer_url,
+        required_scopes=[_MCP_SCOPE],
+        resource_server_url=None,
+    )
+
+
 def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
     """Create and configure the MCP application (Linux port)."""
 
@@ -161,7 +199,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         instructions="""
         You are a WeChat assistant powered by WeChat-AI Bot (Linux).
         - Query contacts and message history through read-only Linux WeChat SQLCipher DB access.
-        - Send text, files, pat messages, and supported group actions via the local RPA queue.
+        - Send text, files, pat messages, and supported group actions via the local RPA queue only when WECHAT_AI_MCP_WRITE_ENABLED=true.
+        - Admin tools that mutate local runtime state require WECHAT_AI_MCP_ADMIN_ENABLED=true.
         - Use dry_run=true before sending or changing group state when the tool supports it.
         - High-impact group operations require explicit human confirmation.
         - Treat status="unavailable" as a hard failure for tools that are not yet ported.
@@ -171,6 +210,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         json_response=True,
         host=mcp_config.get("host", "0.0.0.0"),
         port=mcp_port,
+        token_verifier=EnvMcpTokenVerifier(),
+        auth=_mcp_auth_settings(config),
     )
 
     if bot is not None and _get_nested_config(config, "debug.enabled", True):
@@ -215,6 +256,46 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         except (TypeError, ValueError):
             number = default
         return max(minimum, min(number, maximum))
+
+    def _env_flag(name: str, default: bool = False) -> bool:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _mcp_write_enabled() -> bool:
+        return _env_flag("WECHAT_AI_MCP_WRITE_ENABLED", False)
+
+    def _mcp_admin_enabled() -> bool:
+        return _env_flag("WECHAT_AI_MCP_ADMIN_ENABLED", False)
+
+    def _mcp_write_blocked(tool_name: str) -> str:
+        return _json(
+            {
+                "status": "blocked",
+                "tool": tool_name,
+                "message": "MCP write tools are disabled. Set WECHAT_AI_MCP_WRITE_ENABLED=true to allow this operation.",
+            }
+        )
+
+    def _mcp_admin_blocked(tool_name: str) -> str:
+        return _json(
+            {
+                "status": "blocked",
+                "tool": tool_name,
+                "message": "MCP admin tools are disabled. Set WECHAT_AI_MCP_ADMIN_ENABLED=true to allow this operation.",
+            }
+        )
+
+    def _mcp_confirmation_required(tool_name: str, message: str) -> str:
+        return _json(
+            {
+                "status": "confirmation_required",
+                "tool": tool_name,
+                "message": message,
+                "required_argument": "confirm=true",
+            }
+        )
 
     def _resolve_rpa_target(name: str) -> dict[str, Any]:
         raw_name = str(name or "").strip()
@@ -265,6 +346,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             response.update(extra)
         if dry_run:
             return _json(response)
+        if not _mcp_write_enabled():
+            return _mcp_write_blocked(tool_name)
         app_context = _get_app_context_from_request(ctx)
         wait_timeout = _bounded_float(wait_seconds, 12, 0, 30)
         dispatch_rpa_wait = getattr(app_context.command_dispatcher, "dispatch_rpa_wait", None)
@@ -593,6 +676,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         """
         Normalize WeChat window state for visual RPA and YOLO: enter main window, resize, and rebuild layout.
         """
+        if not _mcp_admin_enabled():
+            return _mcp_admin_blocked("reset_wechat_window")
         window_manager = _window_manager()
         if not window_manager:
             return _json({"status": "unavailable", "message": "window manager unavailable"})
@@ -680,6 +765,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
     @handle_tool_exceptions
     def refresh_database(ctx: Context) -> str:
         """Rescan Linux WeChat databases and SQLCipher keys, then reload contact/message maps."""
+        if not _mcp_admin_enabled():
+            return _mcp_admin_blocked("refresh_database")
         db = _database_service()
         if not db or not hasattr(db, "refresh"):
             return _json(_database_unavailable_payload(db))
@@ -695,6 +782,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
     @handle_tool_exceptions
     def set_message_polling(ctx: Context, paused: bool) -> str:
         """Pause or resume database message polling."""
+        if not _mcp_admin_enabled():
+            return _mcp_admin_blocked("set_message_polling")
         message_service = _message_service()
         if not message_service:
             return _json({"status": "unavailable", "message": "message service unavailable"})
@@ -998,7 +1087,6 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         Supports @mention in groups. Set dry_run=true to resolve the target without sending.
         wait_seconds controls whether the local RPA execution result is awaited.
         """
-        app_context = _get_app_context_from_request(ctx)
         message = str(message or "")
         if not message:
             return _json({"status": "invalid_request", "message": "message is required"})
@@ -1008,7 +1096,6 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         nickname = resolved["target"]
         is_chatroom = bool(resolved["is_chatroom"])
 
-        topic = f"msg/{app_context.userinfo.account}/rpa_action"
         payload = {
             "local_type": MessageType.Text,
             "message_content": message,
@@ -1027,6 +1114,10 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         }
         if dry_run:
             return _json(response)
+        if not _mcp_write_enabled():
+            return _mcp_write_blocked("send_text_msg")
+        app_context = _get_app_context_from_request(ctx)
+        topic = f"msg/{app_context.userinfo.account}/rpa_action"
         wait_timeout = _bounded_float(wait_seconds, 12, 0, 30)
         dispatch_wait = getattr(app_context.command_dispatcher, "dispatch_wait", None)
         if callable(dispatch_wait):
@@ -1124,8 +1215,12 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
 
     @mcp.tool()
     @handle_tool_exceptions
-    def leave_room(ctx: Context, room_name: str) -> str:
+    def leave_room(ctx: Context, room_name: str, confirm: bool = False) -> str:
         """Leave a group chat."""
+        if not confirm:
+            return _mcp_confirmation_required("leave_room", "Leaving a group requires explicit confirm=true.")
+        if not _mcp_write_enabled():
+            return _mcp_write_blocked("leave_room")
         app_context = _get_app_context_from_request(ctx)
         return app_context.command_dispatcher.dispatch_rpa(
             RPAActionType.LEAVE_ROOM.value, {"target": room_name}
@@ -1134,9 +1229,16 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
     @mcp.tool()
     @handle_tool_exceptions
     def public_room_announcement(
-        ctx: Context, room_name: str, content: str, force_edit: bool = False
+        ctx: Context, room_name: str, content: str, force_edit: bool = False, confirm: bool = False
     ) -> str:
         """Publish or edit a group announcement."""
+        if not confirm:
+            return _mcp_confirmation_required(
+                "public_room_announcement",
+                "Publishing a group announcement requires explicit confirm=true.",
+            )
+        if not _mcp_write_enabled():
+            return _mcp_write_blocked("public_room_announcement")
         app_context = _get_app_context_from_request(ctx)
         return app_context.command_dispatcher.dispatch_rpa(
             RPAActionType.PUBLIC_ROOM_ANNOUNCEMENT.value,
@@ -1171,12 +1273,18 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         member_name: str,
         dry_run: bool = False,
         wait_seconds: Optional[float] = 12,
+        confirm: bool = False,
     ) -> str:
         """Remove a member from a group chat via RPA."""
         room_name = str(room_name or "").strip()
         member_name = str(member_name or "").strip()
         if not room_name or not member_name:
             return _json({"status": "invalid_request", "message": "room_name and member_name are required"})
+        if not dry_run and not confirm:
+            return _mcp_confirmation_required(
+                "remove_room_member",
+                "Removing a group member requires explicit confirm=true.",
+            )
         resolved = _resolve_rpa_target(room_name)
         action_data = {"target": resolved["target"], "user_name": member_name}
         return _dispatch_rpa_tool(
@@ -1201,12 +1309,18 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         user_name: str,
         dry_run: bool = False,
         wait_seconds: Optional[float] = 12,
+        confirm: bool = False,
     ) -> str:
         """Invite a contact into a group chat via RPA."""
         room_name = str(room_name or "").strip()
         user_name = str(user_name or "").strip()
         if not room_name or not user_name:
             return _json({"status": "invalid_request", "message": "room_name and user_name are required"})
+        if not dry_run and not confirm:
+            return _mcp_confirmation_required(
+                "invite_room_member",
+                "Inviting a group member requires explicit confirm=true.",
+            )
         resolved = _resolve_rpa_target(room_name)
         action_data = {"target": resolved["target"], "user_name": user_name}
         return _dispatch_rpa_tool(
@@ -1231,12 +1345,18 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         new_name: str,
         dry_run: bool = False,
         wait_seconds: Optional[float] = 12,
+        confirm: bool = False,
     ) -> str:
         """Rename a group chat via RPA."""
         room_name = str(room_name or "").strip()
         new_name = str(new_name or "").strip()
         if not room_name or not new_name:
             return _json({"status": "invalid_request", "message": "room_name and new_name are required"})
+        if not dry_run and not confirm:
+            return _mcp_confirmation_required(
+                "rename_room_name",
+                "Renaming a group requires explicit confirm=true.",
+            )
         resolved = _resolve_rpa_target(room_name)
         action_data = {"target": resolved["target"], "name": new_name}
         return _dispatch_rpa_tool(
@@ -1261,12 +1381,18 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         new_name_in_room: str,
         dry_run: bool = False,
         wait_seconds: Optional[float] = 12,
+        confirm: bool = False,
     ) -> str:
         """Rename the current user's display name in a group chat via RPA."""
         room_name = str(room_name or "").strip()
         new_name_in_room = str(new_name_in_room or "").strip()
         if not room_name or not new_name_in_room:
             return _json({"status": "invalid_request", "message": "room_name and new_name_in_room are required"})
+        if not dry_run and not confirm:
+            return _mcp_confirmation_required(
+                "rename_name_in_room",
+                "Renaming your group display name requires explicit confirm=true.",
+            )
         resolved = _resolve_rpa_target(room_name)
         action_data = {"target": resolved["target"], "name": new_name_in_room}
         return _dispatch_rpa_tool(

@@ -22,6 +22,20 @@ Default host URLs:
 | Dashboard | `http://localhost:8100/dashboard` |
 | MCP Streamable HTTP | `http://localhost:8100/mcp` |
 
+Set Dashboard credentials before opening it:
+
+```dotenv
+WECHAT_AI_DASHBOARD_USERNAME=your-user
+WECHAT_AI_DASHBOARD_PASSWORD=use-a-strong-password
+WECHAT_AI_MCP_TOKEN=use-another-long-random-token
+```
+
+The placeholders `wechat/wechat` and `WECHAT_AI_MCP_TOKEN=wechat` are rejected
+by the app. MCP requires `Authorization: Bearer <WECHAT_AI_MCP_TOKEN>`.
+Authenticated read tools work by default; runtime-admin tools require
+`WECHAT_AI_MCP_ADMIN_ENABLED=true`, and real WeChat write tools require
+`WECHAT_AI_MCP_WRITE_ENABLED=true`.
+
 Recommended MCP flow:
 
 1. `get_runtime_status`

@@ -362,6 +362,14 @@
       font-weight: 800;
       overflow: hidden;
     }
+    .avatar img,
+    .bubble-avatar img,
+    .profile-avatar img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
     .chat-main {
       min-width: 0;
     }
@@ -416,10 +424,29 @@
     }
     .bubble-row {
       display: flex;
+      align-items: flex-start;
+      gap: 8px;
       margin: 8px 0;
     }
     .bubble-row.out {
       justify-content: flex-end;
+    }
+    .bubble-row.in {
+      justify-content: flex-start;
+    }
+    .bubble-avatar {
+      width: 34px;
+      height: 34px;
+      flex: 0 0 34px;
+      border-radius: 6px;
+      background: #dbeafe;
+      color: #174ea6;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      font-size: 12px;
+      font-weight: 800;
     }
     .bubble-wrap {
       max-width: min(72%, 760px);
@@ -445,12 +472,122 @@
       background: #dff4e8;
       border-color: #b6e0ca;
     }
+    .media-image,
+    .media-video {
+      display: block;
+      max-width: min(420px, 100%);
+      max-height: 420px;
+      border-radius: 6px;
+      border: 1px solid #dbe3ec;
+      background: #f8fafc;
+    }
+    .media-video {
+      width: min(420px, 100%);
+    }
+    .file-card,
+    .link-card,
+    .contact-card {
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr);
+      gap: 10px;
+      min-width: min(360px, 100%);
+      padding: 10px;
+      border: 1px solid #dbe3ec;
+      border-radius: 6px;
+      background: #fff;
+      color: var(--text);
+      text-decoration: none;
+      white-space: normal;
+    }
+    .bubble-row.out .file-card,
+    .bubble-row.out .link-card,
+    .bubble-row.out .contact-card {
+      background: #f7fffa;
+    }
+    .file-icon,
+    .link-cover,
+    .contact-cover {
+      width: 38px;
+      height: 38px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      background: #eaf1ff;
+      color: #1d4ed8;
+      font-weight: 800;
+      font-size: 12px;
+    }
+    .link-cover img,
+    .contact-cover img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .contact-cover {
+      border-radius: 50%;
+    }
+    .media-title {
+      display: block;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .media-sub {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      word-break: break-word;
+    }
+    .mini-map {
+      width: min(360px, 100%);
+      padding: 10px;
+      border: 1px solid #dbe3ec;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #e0f2fe, #f8fafc 55%, #dcfce7);
+      white-space: normal;
+    }
+    .mini-map-pin {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: #ef4444;
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      margin-bottom: 8px;
+      box-shadow: 0 6px 12px rgba(239, 68, 68, 0.25);
+    }
     .bubble-extra {
       margin-top: 7px;
       padding-top: 7px;
       border-top: 1px solid rgba(100, 116, 139, 0.18);
       color: var(--muted);
       font-size: 12px;
+    }
+    .profile-head {
+      display: grid;
+      grid-template-columns: 52px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+    }
+    .profile-avatar {
+      width: 52px;
+      height: 52px;
+      border-radius: 8px;
+      background: #dbeafe;
+      color: #174ea6;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      font-weight: 800;
     }
     .composer {
       border-top: 1px solid var(--line);
@@ -485,6 +622,12 @@
       font-size: 12px;
       word-break: break-word;
     }
+    .member-chip .avatar {
+      width: 34px;
+      height: 34px;
+      margin: 0 auto;
+      font-size: 12px;
+    }
     @media (max-width: 960px) {
       header { align-items: flex-start; flex-direction: column; }
       .shell { grid-template-columns: 1fr; }
@@ -497,6 +640,11 @@
       }
       .bubble-wrap {
         max-width: 88%;
+      }
+      .file-card,
+      .link-card,
+      .contact-card {
+        min-width: 0;
       }
       nav {
         position: sticky;
@@ -763,7 +911,7 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
-    const BASE_PATH = window.location.pathname.startsWith('/dashboard') ? '/dashboard' : '/debug';
+    const BASE_PATH = '/dashboard';
     const apiPath = (path) => `${BASE_PATH}${path}`;
     const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const short = (v, n = 160) => {
@@ -794,7 +942,12 @@
     });
 
     async function fetchJson(url, options = {}) {
-      const res = await fetch(url, { cache: 'no-store', ...options });
+      const method = String(options.method || 'GET').toUpperCase();
+      const headers = new Headers(options.headers || {});
+      if (method !== 'GET' && method !== 'HEAD') {
+        headers.set('X-WeChat-AI-Dashboard', '1');
+      }
+      const res = await fetch(url, { cache: 'no-store', ...options, headers });
       const data = await res.json();
       if (!res.ok || data.ok === false) {
         throw new Error(data.error || `${res.status} ${res.statusText}`);
@@ -1078,9 +1231,8 @@
       const m = chat.last_message || {};
       const active = currentChat && currentChat.username === c.username ? ' active' : '';
       const preview = m.text || m.raw_content || (m.type_name ? `[${m.type_name}]` : '');
-      const initials = (c.display_name || c.username || '?').slice(0, 2);
       return `<button class="chat-item${active}" data-chat-index="${index}">
-        <div class="avatar">${esc(initials)}</div>
+        ${avatarHtml(c, 'avatar')}
         <div class="chat-main">
           <div class="chat-topline">
             <span class="chat-name">${esc(c.display_name || c.username || '')}</span>
@@ -1136,16 +1288,17 @@
         <button data-fill-msg="${esc(c.username)}">填入消息查询</button>
       </div>`;
       const memberHtml = members.length
-        ? `<div class="detail-block"><div class="sub" style="margin-bottom:8px;">群成员 ${members.length}</div><div class="member-grid">${members.map(member => `<div class="member-chip">${esc(member.display_name || member.username)}<div class="sub mono">${esc(short(member.username, 36))}</div></div>`).join("")}</div></div>`
+        ? `<div class="detail-block"><div class="sub" style="margin-bottom:8px;">群成员 ${members.length}</div><div class="member-grid">${members.map(member => `<div class="member-chip">${avatarHtml(member, 'avatar')}<div style="margin-top:6px;">${esc(member.display_name || member.username)}</div><div class="sub mono">${esc(short(member.username, 36))}</div></div>`).join("")}</div></div>`
         : '';
       $('wechatDetail').innerHTML = `
         <div class="detail-block">
-          <div class="item-head">
+          <div class="profile-head">
+            ${avatarHtml(c, 'profile-avatar')}
             <div>
               <div class="title">${esc(c.display_name || c.username || '')}</div>
               <div class="sub mono">${esc(c.username || '')}</div>
+              <div style="margin-top:6px;">${c.is_chatroom ? info('群聊') : info('联系人')}</div>
             </div>
-            ${c.is_chatroom ? info('群聊') : info('联系人')}
           </div>
           ${actions}
         </div>
@@ -1155,6 +1308,7 @@
           ['Alias', esc(c.alias || '')],
           ['Room Remark', esc(c.room_remark || '')],
           ['描述', esc(c.description || '')],
+          ['头像 URL', esc(c.avatar_url || '')],
           ['头像 MD5', esc(c.head_img_md5 || '')],
           ['有消息表', bool(data.has_message_table)],
           ['群成员数', esc(data.member_count ?? '')],
@@ -1168,19 +1322,169 @@
     function chatMessageBubble(m) {
       const out = m.direction === 'out';
       const display = m.sender_display || m.sender_username || (out ? '我' : '');
-      const text = m.text || m.raw_content || `[${m.type_name || m.type || '消息'}]`;
-      const mediaRows = ['path', 'thumb_path', 'file_name', 'file_size', 'file_type', 'md5', 'duration']
+      const mediaRows = ['path', 'thumb_path', 'cover_path', 'file_name', 'file_size_label', 'file_type', 'md5', 'duration']
         .filter(k => m[k] !== undefined && m[k] !== null && m[k] !== '')
         .map(k => `<div>${esc(k)}: <span class="mono">${esc(m[k])}</span></div>`).join("");
+      const avatar = out ? '' : avatarHtml(m.sender || { display_name: display, avatar_url: m.sender_avatar_url }, 'bubble-avatar');
       return `<div class="bubble-row ${out ? 'out' : 'in'}">
+        ${avatar}
         <div class="bubble-wrap">
           <div class="bubble-meta">${esc(display)} · ${esc(m.time || '')} · ${esc(m.type_name || '')}</div>
           <div class="bubble">
-            ${esc(text)}
+            ${messageBodyHtml(m)}
             ${mediaRows ? `<div class="bubble-extra">${mediaRows}</div>` : ''}
           </div>
         </div>
       </div>`;
+    }
+
+    function avatarHtml(contact, className = 'avatar') {
+      const name = contact?.display_name || contact?.remark || contact?.nick_name || contact?.username || '?';
+      const initials = String(name).slice(0, 2);
+      const url = contact?.avatar_url || contact?.small_head_url || contact?.big_head_url || '';
+      return `<div class="${className}">${url ? `<img src="${esc(url)}" alt="">` : esc(initials)}</div>`;
+    }
+
+    function messageBodyHtml(m) {
+      const type = Number(m.type);
+      const typeName = m.type_name || '';
+      const text = m.text || m.raw_content || `[${typeName || type || '消息'}]`;
+      if (typeName.includes('音视频通话')) {
+        return callMessageHtml(m, text);
+      }
+      if (typeName.includes('分享链接') || typeName.includes('小程序') || typeName.includes('音乐') || typeName.includes('视频号')) {
+        return linkMessageHtml(m, text);
+      }
+      if (type === 3 || typeName.includes('图片') || typeName.includes('表情')) {
+        return imageMessageHtml(m, text);
+      }
+      if (type === 43 || typeName.includes('视频')) {
+        return videoMessageHtml(m, text);
+      }
+      if (type === 25769803825 || type === 317827579953 || typeName.includes('文件')) {
+        return fileMessageHtml(m, text);
+      }
+      if (typeName.includes('名片')) {
+        return contactMessageHtml(m, text);
+      }
+      if (typeName.includes('位置')) {
+        return locationMessageHtml(m, text);
+      }
+      if (typeName.includes('转账') || typeName.includes('红包')) {
+        return payMessageHtml(m, text);
+      }
+      if (typeName.includes('语音')) {
+        return audioMessageHtml(m, text);
+      }
+      return `<div>${esc(text)}</div>`;
+    }
+
+    function imageMessageHtml(m, fallbackText) {
+      const src = m.path_url || m.thumb_path_url || m.thumb_url || m.url || '';
+      if (!src) return `<div>${esc(fallbackText)}</div>`;
+      const title = m.type_name || '图片';
+      return `<a href="${esc(m.path_url || src)}" target="_blank" rel="noreferrer">
+        <img class="media-image" src="${esc(src)}" alt="${esc(title)}">
+      </a>`;
+    }
+
+    function videoMessageHtml(m, fallbackText) {
+      const src = m.path_url || m.media_url || '';
+      const poster = m.thumb_path_url || m.cover_path_url || m.cover_url || '';
+      if (src) {
+        return `<video class="media-video" controls preload="metadata" ${poster ? `poster="${esc(poster)}"` : ''} src="${esc(src)}"></video>
+          ${m.duration ? `<div class="media-sub">时长 ${esc(m.duration)} 秒</div>` : ''}`;
+      }
+      if (poster) {
+        return `<a href="${esc(poster)}" target="_blank" rel="noreferrer"><img class="media-image" src="${esc(poster)}" alt="视频封面"></a>
+          <div class="media-sub">${esc(fallbackText)}</div>`;
+      }
+      return `<div>${esc(fallbackText)}</div>`;
+    }
+
+    function fileMessageHtml(m, fallbackText) {
+      const href = m.path_url || m.media_url || '';
+      const name = m.file_name || fallbackText || '文件';
+      const size = m.file_size_label || m.file_size || '';
+      const inner = `<span class="file-icon">${esc(fileExt(name))}</span><span>
+        <span class="media-title">${esc(name)}</span>
+        <span class="media-sub">${esc([size, m.file_type].filter(Boolean).join(' · '))}</span>
+      </span>`;
+      return href
+        ? `<a class="file-card" href="${esc(`${href}${href.includes('?') ? '&' : '?'}download=1`)}">${inner}</a>`
+        : `<div class="file-card">${inner}</div>`;
+    }
+
+    function linkMessageHtml(m, fallbackText) {
+      const href = m.url || m.media_url || '#';
+      const cover = m.cover_path_url || m.cover_url || m.thumb_url || m.publisher_avatar || m.app_logo || '';
+      const title = m.title || m.description || fallbackText;
+      const descParts = [m.app_name, m.publisher_nickname, m.description].filter(Boolean);
+      if (m.duration) descParts.push(`${m.duration} 秒`);
+      if (m.width && m.height) descParts.push(`${m.width} x ${m.height}`);
+      const desc = descParts.join(' · ');
+      const coverHtml = cover ? `<img src="${esc(cover)}" alt="">` : '链';
+      return `<a class="link-card" href="${esc(href)}" target="_blank" rel="noreferrer">
+        <span class="link-cover">${coverHtml}</span><span>
+          <span class="media-title">${esc(title)}</span>
+          <span class="media-sub">${esc(desc)}</span>
+        </span>
+      </a>`;
+    }
+
+    function contactMessageHtml(m, fallbackText) {
+      const name = m.nickname || m.title || fallbackText;
+      const cover = m.small_head_url || m.big_head_url || '';
+      const desc = [m.alias, m.open_im_desc, m.sign, [m.province, m.city].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
+      return `<div class="contact-card">
+        <span class="contact-cover">${cover ? `<img src="${esc(cover)}" alt="">` : esc(String(name || '?').slice(0, 1))}</span>
+        <span>
+          <span class="media-title">${esc(name)}</span>
+          <span class="media-sub">${esc(desc)}</span>
+        </span>
+      </div>`;
+    }
+
+    function locationMessageHtml(m, fallbackText) {
+      const title = m.poiname || m.label || '位置';
+      const sub = [m.label, m.x && m.y ? `${m.x}, ${m.y}` : ''].filter(Boolean).join(' · ');
+      return `<div class="mini-map">
+        <span class="mini-map-pin">位</span>
+        <span class="media-title">${esc(title)}</span>
+        <span class="media-sub">${esc(sub || fallbackText)}</span>
+      </div>`;
+    }
+
+    function audioMessageHtml(m, fallbackText) {
+      const text = m.voice_to_text || fallbackText;
+      return `<div>${esc(text)}</div>${m.duration ? `<div class="media-sub">时长 ${esc(m.duration)} 秒</div>` : ''}`;
+    }
+
+    function callMessageHtml(m, fallbackText) {
+      const title = m.display_content || fallbackText;
+      const kind = m.invite_type === 0 ? '视频通话' : '语音通话';
+      return `<div class="file-card">
+        <span class="file-icon">通</span><span>
+          <span class="media-title">${esc(title)}</span>
+          <span class="media-sub">${esc([kind, m.duration ? `${m.duration} 秒` : ''].filter(Boolean).join(' · '))}</span>
+        </span>
+      </div>`;
+    }
+
+    function payMessageHtml(m, fallbackText) {
+      const title = m.fee_desc || m.pay_memo || fallbackText;
+      const sub = [m.pay_memo, m.receiver_username, m.pay_subtype ? `subtype ${m.pay_subtype}` : ''].filter(Boolean).join(' · ');
+      return `<div class="file-card">
+        <span class="file-icon">¥</span><span>
+          <span class="media-title">${esc(title)}</span>
+          <span class="media-sub">${esc(sub)}</span>
+        </span>
+      </div>`;
+    }
+
+    function fileExt(name) {
+      const part = String(name || '').split('.').pop();
+      return part && part.length <= 5 && part !== name ? part.toUpperCase() : 'FILE';
     }
 
     async function queryMessages(media = false) {
@@ -1217,13 +1521,14 @@
       const labels = {
         path: '路径',
         thumb_path: '缩略图',
+        cover_path: '封面',
         file_name: '文件名',
         file_size: '文件大小',
         file_type: '文件类型',
         md5: 'MD5',
         duration: '时长'
       };
-      const media = ['path', 'thumb_path', 'file_name', 'file_size', 'file_type', 'md5', 'duration']
+      const media = ['path', 'thumb_path', 'cover_path', 'file_name', 'file_size_label', 'file_type', 'md5', 'duration']
         .filter(k => m[k] !== undefined && m[k] !== null && m[k] !== '')
         .map(k => `<tr><th>${esc(labels[k] || k)}</th><td>${esc(m[k])}</td></tr>`).join("");
       return `<div class="item">
@@ -1234,7 +1539,7 @@
           </div>
           ${status}
         </div>
-        <div class="message-text">${esc(m.text || m.raw_content || m.factory_error || '')}</div>
+        <div class="message-text">${messageBodyHtml(m)}</div>
         ${media ? `<table class="kv" style="margin-top:8px;"><tbody>${media}</tbody></table>` : ''}
       </div>`;
     }

@@ -92,7 +92,8 @@ visual_message:
   yolo_imgsz: auto
   yolo_stride: 32
 
-# Internal dashboard and compatibility debug routes (served by MCP HTTP server)
+# Internal dashboard routes (served by MCP HTTP server).
+# Dashboard login is controlled by WECHAT_AI_DASHBOARD_USERNAME/PASSWORD.
 debug:
   enabled: true
   allow_raw_screenshot: false

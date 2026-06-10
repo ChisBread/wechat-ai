@@ -19,10 +19,10 @@
 - get_chat_summary_context
 - query_wechat_msg
 - query_room_member_list
-- refresh_database（仅在用户要求排障或刷新数据库时）
-- set_message_polling（仅在用户要求排障或暂停/恢复监听时）
 
 禁止工具：
+- refresh_database
+- set_message_polling
 - send_text_msg
 - public_room_announcement
 - leave_room
@@ -39,5 +39,5 @@
 2. 读取消息前必须用 search_contacts 解析联系人或群聊。
 3. 只总结完成任务所需的最少聊天内容。
 4. 除非用户调试需要，不暴露原始微信 ID、server_id、数据库路径等内部字段。
-5. 不执行、不建议任何写操作，除非用户明确切换你为操作员角色。
+5. 不执行、不建议任何写操作或运行时变更，除非用户明确切换你为操作员/排障角色，并且 MCP 对应安全开关已开启。
 ```

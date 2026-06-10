@@ -8,6 +8,15 @@ WeChat-AI 在 bot 同一进程内暴露 Streamable HTTP MCP Server。默认 Dock
 
 MCP Server 能读取聊天记录并提交微信 RPA 动作，只适合作为内部服务使用。不要在没有反向代理鉴权、访问控制和审计的情况下暴露到公网。
 
+默认安全策略：
+
+- MCP endpoint 需要 `Authorization: Bearer <WECHAT_AI_MCP_TOKEN>`。
+- 默认 `WECHAT_AI_MCP_TOKEN=wechat` 会被拒绝访问。
+- 认证通过后，读取类 MCP 工具可用。
+- `refresh_database`、`reset_wechat_window`、`set_message_polling` 默认被拦截，需要设置 `WECHAT_AI_MCP_ADMIN_ENABLED=true`。
+- 发送消息、文件、拍一拍、群公告、退群、邀请/移除群成员、改群名等真实写操作默认被拦截，需要设置 `WECHAT_AI_MCP_WRITE_ENABLED=true`。
+- 即使开启写操作，也建议 Agent 先用 `dry_run=true`，把目标、正文和群操作参数展示给人确认后再执行。
+
 ## 推荐 Agent 工作流
 
 1. 调用 `get_runtime_status`，确认数据库、RPA、微信窗口可用。
@@ -18,7 +27,9 @@ MCP Server 能读取聊天记录并提交微信 RPA 动作，只适合作为内�
 6. 把解析到的目标、完整文本或群操作参数展示给人类确认。
 7. 人类明确确认后，再调用对应写工具执行。
 
-`leave_room`、`public_room_announcement`、`remove_room_member`、`invite_room_member`、`rename_room_name`、`rename_name_in_room` 这类群操作必须要求用户明确提出该操作，不能由 Agent 自行推断执行。
+`leave_room`、`public_room_announcement`、`remove_room_member`、`invite_room_member`、`rename_room_name`、`rename_name_in_room` 这类群操作必须要求用户明确提出该操作，不能由 Agent 自行推断执行；确认后的真实执行调用必须传 `confirm=true`。
+
+如果未开启对应环境变量，工具会返回 `status="blocked"`，这不是运行错误，而是安全开关生效。如果高风险群操作未传 `confirm=true`，会返回 `status="confirmation_required"`。
 
 ## 客户端接入
 
@@ -28,6 +39,12 @@ MCP Server 能读取聊天记录并提交微信 RPA 动作，只适合作为内�
 
 ```text
 http://localhost:8100/mcp
+```
+
+请求头需要带：
+
+```http
+Authorization: Bearer <WECHAT_AI_MCP_TOKEN>
 ```
 
 ### Claude Code
@@ -42,14 +59,20 @@ claude mcp add --transport http wechat-ai http://localhost:8100/mcp
 
 ### 只支持 stdio 的客户端
 
-如果客户端只支持 stdio MCP，可以使用 HTTP-to-stdio bridge，例如 `mcp-remote`：
+如果客户端只支持 stdio MCP，可以使用支持自定义 HTTP header 的 HTTP-to-stdio bridge，例如 `mcp-remote`。不同 bridge 的 header 参数不完全一致，核心要求是转发以下请求头：
 
-```json
+```jsonc
 {
   "mcpServers": {
     "wechat-ai": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "http://localhost:8100/mcp"]
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://localhost:8100/mcp"
+      ]
+      // 需要按 bridge 文档附加请求头：
+      // Authorization: Bearer ${WECHAT_AI_MCP_TOKEN}
     }
   }
 }
@@ -66,7 +89,10 @@ OpenClaw 或类似支持 MCP JSON 配置的客户端可使用 Streamable HTTP：
   "mcpServers": {
     "wechat-ai": {
       "transport": "streamable-http",
-      "url": "http://localhost:8100/mcp"
+      "url": "http://localhost:8100/mcp",
+      "headers": {
+        "Authorization": "Bearer ${WECHAT_AI_MCP_TOKEN}"
+      }
     }
   }
 }
@@ -115,14 +141,25 @@ OpenClaw 或类似支持 MCP JSON 配置的客户端可使用 Streamable HTTP：
 | `send_text_msg` | 文本消息入 RPA 队列并可等待执行结果 | 发送前先用 `dry_run=true` |
 | `send_file_msg` | 发送容器内可访问的本地文件 | `file_path` 必须是容器内路径 |
 | `send_pat_msg` | 对联系人或群成员执行“拍一拍” | 群内拍一拍要求目标头像在当前消息区可见 |
-| `public_room_announcement` | 群公告入 RPA 队列 | 需要账号有群管理权限 |
-| `leave_room` | 退群操作入 RPA 队列 | 破坏性操作，必须人工确认 |
-| `remove_room_member` | 移除群成员 | 破坏性操作，必须人工确认 |
-| `invite_room_member` | 邀请联系人进群 | 需要当前账号有权限 |
-| `rename_room_name` | 修改群名 | 高影响操作，必须人工确认 |
-| `rename_name_in_room` | 修改自己在群内的昵称 | 高影响操作，必须人工确认 |
+| `public_room_announcement` | 群公告入 RPA 队列 | 需要账号有群管理权限，真实执行需 `confirm=true` |
+| `leave_room` | 退群操作入 RPA 队列 | 破坏性操作，真实执行需 `confirm=true` |
+| `remove_room_member` | 移除群成员 | 破坏性操作，真实执行需 `confirm=true` |
+| `invite_room_member` | 邀请联系人进群 | 需要当前账号有权限，真实执行需 `confirm=true` |
+| `rename_room_name` | 修改群名 | 高影响操作，真实执行需 `confirm=true` |
+| `rename_name_in_room` | 修改自己在群内的昵称 | 高影响操作，真实执行需 `confirm=true` |
 
 这些写操作都依赖当前微信界面、窗口尺寸、OCR 和 YOLO 识别结果。调用前建议先确认 `get_wechat_window_status` 返回窗口已对齐；异常时先调用 `reset_wechat_window`。
+
+## Dashboard 与 MCP 暴露建议
+
+Dashboard 地址是 `http://localhost:8100/dashboard`，内置 Basic Auth。账号密码来自 `WECHAT_AI_DASHBOARD_USERNAME` / `WECHAT_AI_DASHBOARD_PASSWORD`，默认 `wechat/wechat` 会被拒绝登录。Dashboard 状态变更 POST 还要求 `X-WeChat-AI-Dashboard: 1`，页面会自动携带；脚本调用时需要手动加。MCP 地址是 `http://localhost:8100/mcp`，需要 Bearer token，默认 `WECHAT_AI_MCP_TOKEN=wechat` 会被拒绝。
+
+MCP 本身面向可信 Agent 客户端。把 `8100` 端口暴露到其他机器前，请至少满足以下条件：
+
+- 使用 HTTPS 反向代理或 VPN，不裸露明文公网访问。
+- 反向代理层增加登录鉴权、IP 白名单或内网访问控制。
+- 只在确实需要时开启 `WECHAT_AI_MCP_ADMIN_ENABLED` 和 `WECHAT_AI_MCP_WRITE_ENABLED`。
+- 不把 `.env`、`config/`、`xwechat_files/` 和容器内 `/config` 目录同步到不可信位置。
 
 ## 示例
 

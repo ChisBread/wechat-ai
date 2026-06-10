@@ -1,5 +1,8 @@
 import unittest
+import base64
 import json
+import os
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -7,6 +10,52 @@ from wechat_ai_bot.mcp.debug import _dashboard_html, build_layout_png, mask_valu
 from wechat_ai_bot.mcp.app import create_app
 from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.utils import size_config
+
+
+@contextmanager
+def temporary_env(**values):
+    previous = {key: os.environ.get(key) for key in values}
+    for key, value in values.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = str(value)
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def dashboard_auth_headers(username="admin", password="secret"):
+    token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+    return {"Authorization": f"Basic {token}"}
+
+
+def dashboard_mutation_headers(username="admin", password="secret"):
+    return {**dashboard_auth_headers(username, password), "X-WeChat-AI-Dashboard": "1"}
+
+
+def dashboard_auth_env(username="admin", password="secret"):
+    return temporary_env(
+        WECHAT_AI_DASHBOARD_USERNAME=username,
+        WECHAT_AI_DASHBOARD_PASSWORD=password,
+    )
+
+
+def mcp_token_env(token="secret-token"):
+    return temporary_env(WECHAT_AI_MCP_TOKEN=token)
+
+
+def mcp_auth_headers(token="secret-token"):
+    return {"Authorization": f"Bearer {token}"}
+
+
+def mcp_admin_env(enabled=True):
+    return temporary_env(WECHAT_AI_MCP_ADMIN_ENABLED="true" if enabled else None)
 
 
 class DummySize:
@@ -57,6 +106,8 @@ class DummyContact:
     remark = "Alice"
     nick_name = "Alice Nick"
     room_remark = ""
+    small_head_url = "https://example.test/alice-small.jpg"
+    big_head_url = "https://example.test/alice-big.jpg"
 
     @property
     def display_name(self):
@@ -75,20 +126,41 @@ class DummyRoomContact(DummyContact):
     alias = ""
 
 
+class DummyMediaContact(DummyContact):
+    id = 3
+    username = "media"
+    remark = "Media"
+    nick_name = "Media Nick"
+    alias = ""
+
+
 class DummyDatabaseService:
     is_available = True
     last_error = ""
 
-    def __init__(self):
+    def __init__(self, root=None):
+        self.root = Path(root or "/tmp")
+        self._primary_account = type(
+            "Account",
+            (),
+            {
+                "account_id": "me",
+                "account_dir": self.root,
+                "db_storage_dir": self.root / "db_storage",
+            },
+        )()
         self.contact = DummyContact()
         self.room = DummyRoomContact()
+        self.media = DummyMediaContact()
         self._contact_by_username = {
             self.contact.username: self.contact,
             self.room.username: self.room,
+            self.media.username: self.media,
         }
         self._message_username_map = {
             self.contact.username: {Path("/tmp/message_0.db")},
             self.room.username: {Path("/tmp/message_0.db")},
+            self.media.username: {Path("/tmp/message_0.db")},
         }
         self.refreshed = False
 
@@ -105,29 +177,56 @@ class DummyDatabaseService:
     def get_contact_by_sender_id(self, sender_id, message_db_path=None):
         return self.contact
 
+    def _text_row(self):
+        return (
+            1,
+            1001,
+            1,
+            10,
+            1,
+            1780998000,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "",
+            "hello",
+            None,
+            None,
+            None,
+            None,
+            "/tmp/message_0.db",
+        )
+
+    def _image_row(self):
+        return (
+            2,
+            1002,
+            3,
+            11,
+            1,
+            1780998060,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "",
+            "<msg><img md5=\"image-md5\" /></msg>",
+            None,
+            None,
+            None,
+            None,
+            "/tmp/message_0.db",
+        )
+
     def get_messages_by_username(self, username, count=10, order="desc"):
-        return [
-            (
-                1,
-                1001,
-                1,
-                10,
-                1,
-                1780998000,
-                0,
-                0,
-                0,
-                0,
-                0,
-                "",
-                "hello",
-                None,
-                None,
-                None,
-                None,
-                "/tmp/message_0.db",
-            )
-        ][:count]
+        rows = [self._image_row() if username == "media" else self._text_row()]
+        return rows[:count]
+
+    def get_image(self, xml_content, message, up_dir="", md5=None, thumb=False, sender_wxid=""):
+        return Path("msg/attach/alice/2026-06/Img/image_t.dat" if thumb else "msg/attach/alice/2026-06/Img/image.dat")
 
     def query_text_messages(self, username, query=None, start_timestamp=None, end_timestamp=None, limit=10):
         return [("hello", "alice", "/tmp/message_0.db", 1780998000, 1001)]
@@ -157,12 +256,51 @@ class DummyMessageService:
         self.is_paused = False
 
 
+class DummyImageMessage:
+    contact = DummyContact()
+    room = None
+    path = "msg/attach/alice/2026-06/Img/image.dat"
+    thumb_path = "msg/attach/alice/2026-06/Img/image_t.dat"
+    file_name = "image.dat"
+    file_size = 2048
+    file_type = "png"
+    md5 = "image-md5"
+    duration = 0
+
+    def to_text(self):
+        return "【图片】"
+
+    def to_json(self):
+        return {
+            "text": "【图片】",
+            "path": self.path,
+            "thumb_path": self.thumb_path,
+            "thumb_url": "https://example.test/thumb.gif",
+            "desc": "sample image",
+        }
+
+
+class DummyMessageFactoryService:
+    def create_message(self, message):
+        return DummyImageMessage()
+
+
 class DummyMcpBot(DummyBot):
     def __init__(self):
         self.window_manager = DummyWindowManager()
         self.database_service = DummyDatabaseService()
         self.message_service = DummyMessageService()
         self.message_factory_service = None
+        self.rpa_task_queue = None
+        self.chat_window_ready = False
+
+
+class DummyMediaBot(DummyMcpBot):
+    def __init__(self, root):
+        self.window_manager = DummyWindowManager()
+        self.database_service = DummyDatabaseService(root=root)
+        self.message_service = DummyMessageService()
+        self.message_factory_service = DummyMessageFactoryService()
         self.rpa_task_queue = None
         self.chat_window_ready = False
 
@@ -224,12 +362,10 @@ class DebugRoutesTest(unittest.TestCase):
         self.assertIn("/dashboard/api/rpa/send_text", paths)
         self.assertIn("/dashboard/api/rpa/action", paths)
         self.assertIn("/dashboard/api/window/reset", paths)
-        self.assertIn("/debug", paths)
-        self.assertIn("/debug/api/status", paths)
-        self.assertIn("/debug/api/contacts", paths)
-        self.assertIn("/debug/api/messages", paths)
-        self.assertIn("/debug/api/rpa/send_text", paths)
-        self.assertIn("/debug/api/window/reset", paths)
+        self.assertIn("/dashboard/media", paths)
+        self.assertIn("/dashboard/layout.png", paths)
+        self.assertNotIn("/debug", paths)
+        self.assertNotIn("/debug/api/status", paths)
 
     def test_dashboard_html_loads_manager_template(self):
         html = _dashboard_html()
@@ -240,6 +376,10 @@ class DebugRoutesTest(unittest.TestCase):
         self.assertIn('data-wechat-mode="contacts"', html)
         self.assertIn('data-wechat-mode="rooms"', html)
         self.assertIn("重置窗口尺寸", html)
+        self.assertIn("messageBodyHtml", html)
+        self.assertIn("media-image", html)
+        self.assertIn("profile-avatar", html)
+        self.assertIn("locationMessageHtml", html)
 
     def test_create_app_skips_debug_routes_when_disabled(self):
         app = create_app(
@@ -251,6 +391,95 @@ class DebugRoutesTest(unittest.TestCase):
 
         self.assertNotIn("/dashboard", paths)
         self.assertNotIn("/debug", paths)
+
+    def test_dashboard_requires_non_default_basic_auth(self):
+        from starlette.testclient import TestClient
+
+        with dashboard_auth_env("wechat", "wechat"):
+            app = create_app(
+                UserInfo(account="me"),
+                DummyConfig({"debug": {"enabled": True}, "mcp": {"port": 8000}}),
+                bot=DummyMcpBot(),
+            )
+            client = TestClient(app.streamable_http_app())
+
+            missing = client.get("/dashboard")
+            default_auth = client.get("/dashboard", headers=dashboard_auth_headers("wechat", "wechat"))
+
+        self.assertEqual(missing.status_code, 401)
+        self.assertIn("WWW-Authenticate", missing.headers)
+        self.assertEqual(default_auth.status_code, 401)
+        self.assertIn("default wechat/wechat is disabled", default_auth.text)
+
+        with dashboard_auth_env("admin", "secret"):
+            app = create_app(
+                UserInfo(account="me"),
+                DummyConfig({"debug": {"enabled": True}, "mcp": {"port": 8000}}),
+                bot=DummyMcpBot(),
+            )
+            client = TestClient(app.streamable_http_app())
+
+            missing = client.get("/dashboard")
+            wrong = client.get("/dashboard", headers=dashboard_auth_headers("admin", "wrong"))
+            ok = client.get("/dashboard", headers=dashboard_auth_headers("admin", "secret"))
+            api = client.get("/dashboard/api/status", headers=dashboard_auth_headers("admin", "secret"))
+            old_debug = client.get("/debug", headers=dashboard_auth_headers("admin", "secret"))
+
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(wrong.status_code, 401)
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual(api.status_code, 200)
+        self.assertFalse(api.json()["debug"]["show_sensitive"])
+        self.assertEqual(old_debug.status_code, 404)
+
+    def test_dashboard_mutation_routes_require_dashboard_header(self):
+        from starlette.testclient import TestClient
+
+        with dashboard_auth_env("admin", "secret"):
+            app = create_app(
+                UserInfo(account="me"),
+                DummyConfig({"debug": {"enabled": True}, "mcp": {"port": 8000}}),
+                bot=DummyMcpBot(),
+            )
+            client = TestClient(app.streamable_http_app())
+
+            forbidden = client.post("/dashboard/api/message/pause", headers=dashboard_auth_headers())
+            ok = client.post("/dashboard/api/message/pause", headers=dashboard_mutation_headers())
+
+        self.assertEqual(forbidden.status_code, 403)
+        self.assertEqual(ok.status_code, 200)
+        self.assertTrue(ok.json()["message"]["running"])
+
+    def test_mcp_http_requires_non_default_bearer_token(self):
+        from starlette.testclient import TestClient
+
+        with mcp_token_env("wechat"):
+            app = create_app(
+                UserInfo(account="me"),
+                DummyConfig({"debug": {"enabled": False}, "mcp": {"port": 8000}}),
+                bot=DummyMcpBot(),
+            )
+            with TestClient(app.streamable_http_app()) as client:
+                missing = client.get("/mcp")
+                default_auth = client.get("/mcp", headers=mcp_auth_headers("wechat"))
+
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(default_auth.status_code, 401)
+
+        with mcp_token_env("secret-token"):
+            app = create_app(
+                UserInfo(account="me"),
+                DummyConfig({"debug": {"enabled": False}, "mcp": {"port": 8000}}),
+                bot=DummyMcpBot(),
+            )
+            with TestClient(app.streamable_http_app()) as client:
+                missing = client.get("/mcp")
+                wrong = client.get("/mcp", headers=mcp_auth_headers("wrong"))
+                authorized = client.get("/mcp", headers=mcp_auth_headers("secret-token"))
+
+        self.assertEqual(missing.status_code, 401)
+        self.assertEqual(wrong.status_code, 401)
+        self.assertNotEqual(authorized.status_code, 401)
 
     def test_create_app_registers_manager_mcp_tools(self):
         app = create_app(
@@ -279,8 +508,9 @@ class DebugRoutesTest(unittest.TestCase):
 
         database = json.loads(app._tool_manager._tools["get_database_status"].fn(None))
         window = json.loads(app._tool_manager._tools["get_wechat_window_status"].fn(None))
-        reset = json.loads(app._tool_manager._tools["reset_wechat_window"].fn(None))
-        pause = json.loads(app._tool_manager._tools["set_message_polling"].fn(None, True))
+        with mcp_admin_env():
+            reset = json.loads(app._tool_manager._tools["reset_wechat_window"].fn(None))
+            pause = json.loads(app._tool_manager._tools["set_message_polling"].fn(None, True))
 
         self.assertEqual(database["status"], "ok")
         self.assertEqual(window["status"], "ok")
@@ -289,6 +519,36 @@ class DebugRoutesTest(unittest.TestCase):
         self.assertTrue(bot.chat_window_ready)
         self.assertEqual(pause["status"], "ok")
         self.assertTrue(pause["paused"])
+
+    def test_mcp_admin_and_write_tools_are_blocked_by_default(self):
+        app = create_app(
+            UserInfo(account="me"),
+            DummyConfig({"debug": {"enabled": False}, "mcp": {"port": 8000}}),
+            bot=DummyMcpBot(),
+        )
+        tools = app._tool_manager._tools
+
+        reset = json.loads(tools["reset_wechat_window"].fn(None))
+        send = json.loads(tools["send_text_msg"].fn(None, "Alice", "hello", None, False))
+
+        self.assertEqual(reset["status"], "blocked")
+        self.assertEqual(reset["tool"], "reset_wechat_window")
+        self.assertEqual(send["status"], "blocked")
+        self.assertEqual(send["tool"], "send_text_msg")
+
+    def test_mcp_high_impact_group_tools_require_confirmation(self):
+        app = create_app(
+            UserInfo(account="me"),
+            DummyConfig({"debug": {"enabled": False}, "mcp": {"port": 8000}}),
+            bot=DummyMcpBot(),
+        )
+        tools = app._tool_manager._tools
+
+        payload = json.loads(tools["remove_room_member"].fn(None, "Room", "Alice", False))
+
+        self.assertEqual(payload["status"], "confirmation_required")
+        self.assertEqual(payload["tool"], "remove_room_member")
+        self.assertEqual(payload["required_argument"], "confirm=true")
 
     def test_mcp_contact_and_message_tools_return_structured_payloads(self):
         app = create_app(
@@ -311,19 +571,21 @@ class DebugRoutesTest(unittest.TestCase):
     def test_dashboard_wechat_api_payloads(self):
         from starlette.testclient import TestClient
 
-        app = create_app(
-            UserInfo(account="me"),
-            DummyConfig({"debug": {"enabled": True}, "mcp": {"port": 8000}}),
-            bot=DummyMcpBot(),
-        )
-        client = TestClient(app.streamable_http_app())
+        with dashboard_auth_env():
+            app = create_app(
+                UserInfo(account="me"),
+                DummyConfig({"debug": {"enabled": True}, "mcp": {"port": 8000}}),
+                bot=DummyMcpBot(),
+            )
+            client = TestClient(app.streamable_http_app())
+            headers = dashboard_auth_headers()
 
-        chats = client.get("/dashboard/api/chats")
-        contacts = client.get("/dashboard/api/contacts?q=&type=contact")
-        rooms = client.get("/dashboard/api/contacts?q=&type=chatroom")
-        status = client.get("/dashboard/api/status")
-        detail = client.get("/dashboard/api/contact/detail?username=room@chatroom")
-        recent = client.get("/dashboard/api/messages/recent?username=alice")
+            chats = client.get("/dashboard/api/chats", headers=headers)
+            contacts = client.get("/dashboard/api/contacts?q=&type=contact", headers=headers)
+            rooms = client.get("/dashboard/api/contacts?q=&type=chatroom", headers=headers)
+            status = client.get("/dashboard/api/status?show_sensitive=1", headers=headers)
+            detail = client.get("/dashboard/api/contact/detail?username=room@chatroom", headers=headers)
+            recent = client.get("/dashboard/api/messages/recent?username=alice", headers=headers)
 
         self.assertEqual(chats.status_code, 200)
         self.assertTrue(chats.json()["chats"])
@@ -337,6 +599,44 @@ class DebugRoutesTest(unittest.TestCase):
         self.assertEqual(detail.json()["member_count"], 1)
         self.assertEqual(recent.status_code, 200)
         self.assertEqual(recent.json()["messages"][0]["text"], "hello")
+
+    def test_dashboard_media_payload_and_proxy(self):
+        from starlette.testclient import TestClient
+
+        with TemporaryDirectory() as tmp, dashboard_auth_env():
+            root = Path(tmp)
+            png = (
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+                b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+                b"\x00\x00\x00\rIDATx\x9cc\xf8\xff\xff?\x00\x05\xfe"
+                b"\x02\xfe\xa7\x35\x81\x84\x00\x00\x00\x00IEND\xaeB`\x82"
+            )
+            image_dir = root / "msg" / "attach" / "alice" / "2026-06" / "Img"
+            image_dir.mkdir(parents=True)
+            (image_dir / "image.dat").write_bytes(png)
+            (image_dir / "image_t.dat").write_bytes(png)
+            app = create_app(
+                UserInfo(account="me"),
+                DummyConfig({"debug": {"enabled": True}, "mcp": {"port": 8000}}),
+                bot=DummyMediaBot(root),
+            )
+            client = TestClient(app.streamable_http_app())
+            headers = dashboard_auth_headers()
+
+            recent = client.get("/dashboard/api/messages/recent?username=media", headers=headers)
+            payload = recent.json()["messages"][0]
+            media = client.get(payload["thumb_path_url"], headers=headers)
+
+            self.assertEqual(recent.status_code, 200)
+            self.assertEqual(payload["type_name"], "图片")
+            self.assertEqual(payload["path_url"], "/dashboard/media?path=msg/attach/alice/2026-06/Img/image.dat")
+            self.assertEqual(payload["thumb_path_url"], "/dashboard/media?path=msg/attach/alice/2026-06/Img/image_t.dat")
+            self.assertEqual(payload["thumb_url"], "https://example.test/thumb.gif")
+            self.assertEqual(payload["file_size_label"], "2.00 KB")
+            self.assertEqual(payload["sender_avatar_url"], "https://example.test/alice-small.jpg")
+            self.assertEqual(media.status_code, 200)
+            self.assertEqual(media.headers["content-type"], "image/png")
+            self.assertEqual(media.content, png)
 
     def test_ported_write_tools_return_dry_run_payloads(self):
         app = create_app(

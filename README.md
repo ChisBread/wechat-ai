@@ -35,6 +35,16 @@ docker compose up -d --build
 
 如果你复制 `.env.example` 为 `.env`，默认端口仍然是这组值。
 
+第一次启动前请先改 `.env` 里的管理台账号密码：
+
+```dotenv
+WECHAT_AI_DASHBOARD_USERNAME=你的用户名
+WECHAT_AI_DASHBOARD_PASSWORD=换成强密码
+WECHAT_AI_MCP_TOKEN=换成另一串长随机 token
+```
+
+`wechat/wechat` 和 `WECHAT_AI_MCP_TOKEN=wechat` 都只是占位值，程序会拒绝用默认值登录或访问 MCP。
+
 ### 2. 登录微信
 
 打开：
@@ -57,6 +67,8 @@ https://localhost:3101
 http://localhost:8100/dashboard
 ```
 
+浏览器会弹出 Basic Auth 登录框。账号密码来自 `.env` 里的 `WECHAT_AI_DASHBOARD_USERNAME` / `WECHAT_AI_DASHBOARD_PASSWORD`。
+
 重点看这几项：
 
 - 数据库是否可用，联系人数量和消息表数量是否大于 0。
@@ -74,6 +86,12 @@ MCP 地址：
 http://localhost:8100/mcp
 ```
 
+MCP 使用 Bearer token 鉴权：
+
+```http
+Authorization: Bearer <WECHAT_AI_MCP_TOKEN>
+```
+
 建议 Agent 按这个顺序工作：
 
 1. `get_runtime_status`：确认数据库、RPA 和微信窗口状态。
@@ -82,6 +100,13 @@ http://localhost:8100/mcp
 4. 调用写操作前先设置 `dry_run=true`，只解析目标和参数，不真正执行。
 5. 把收件人、群聊、完整文本或群操作参数展示给人确认。
 6. 人明确确认后，再调用对应写工具执行。
+
+MCP 通过 Bearer token 认证后默认只开放读取类工具。需要让 Agent 执行运维或写微信操作时，再按需打开：
+
+```dotenv
+WECHAT_AI_MCP_ADMIN_ENABLED=true   # 允许 reset_wechat_window、refresh_database、set_message_polling
+WECHAT_AI_MCP_WRITE_ENABLED=true   # 允许 send_text_msg、send_file_msg、群操作等真实写入
+```
 
 更完整的工具说明和客户端配置见 [MCP 使用指南](docs/mcp.md)。
 
@@ -117,7 +142,7 @@ http://localhost:8100/mcp
 - `remove_room_member` / `invite_room_member`：移除或邀请群成员。
 - `rename_room_name` / `rename_name_in_room`：修改群名或自己在群内的昵称。
 
-这些写操作都依赖当前微信界面、窗口尺寸、OCR 和 YOLO 识别结果。调用前建议先看 `get_wechat_window_status`，异常时先执行 `reset_wechat_window`。群成员、群名、退群、群公告属于高影响操作，必须由人明确确认。
+这些写操作都依赖当前微信界面、窗口尺寸、OCR 和 YOLO 识别结果。调用前建议先看 `get_wechat_window_status`，异常时先执行 `reset_wechat_window`。群成员、群名、退群、群公告属于高影响操作，必须由人明确确认；确认后的真实执行调用还需要传 `confirm=true`。
 
 ## 管理台
 
@@ -127,7 +152,7 @@ http://localhost:8100/mcp
 http://localhost:8100/dashboard
 ```
 
-它是内部运维页面，不内置登录鉴权。不要直接暴露到公网；如果需要远程访问，请先放到反向代理、登录鉴权和访问控制后面。
+它是内部运维页面，内置 Basic Auth。不要直接暴露到公网；如果需要远程访问，请放到 HTTPS 反向代理、额外登录鉴权和访问控制后面。`wechat/wechat` 默认账号密码不能登录，必须在环境变量里改成自己的账号和强密码。
 
 目前管理台提供：
 
@@ -138,7 +163,20 @@ http://localhost:8100/dashboard
 - 窗口：微信窗口几何信息、消息区域、布局示意图、YOLO 状态。
 - 日志：脱敏后的 bot 日志尾部。
 
-旧入口 `/debug` 会跳转到 `/dashboard`。为了兼容旧脚本，`/debug/api/...` 仍然保留。
+旧入口 `/debug` 已移除，请统一使用 `/dashboard`。
+
+## 安全默认值
+
+- Dashboard、联系人、消息、媒体代理、日志、窗口控制和 Dashboard RPA API 都需要 Basic Auth。
+- Dashboard 的状态变更 POST 还要求 `X-WeChat-AI-Dashboard: 1`，用于降低浏览器 CSRF 风险。
+- MCP endpoint 需要 `Authorization: Bearer <WECHAT_AI_MCP_TOKEN>`。
+- 默认 `WECHAT_AI_DASHBOARD_USERNAME=wechat` 且 `WECHAT_AI_DASHBOARD_PASSWORD=wechat` 时禁止登录，避免镜像一启动就暴露可猜口令。
+- 默认 `WECHAT_AI_MCP_TOKEN=wechat` 时拒绝访问 MCP，避免聊天记录读取接口裸露。
+- MCP 认证通过后读取工具可用；`refresh_database`、`reset_wechat_window`、`set_message_polling` 需要 `WECHAT_AI_MCP_ADMIN_ENABLED=true`。
+- MCP 写入微信的工具默认被拦截；发送消息、文件、拍一拍、群公告、退群、邀请/移除群成员、改群名等需要 `WECHAT_AI_MCP_WRITE_ENABLED=true`。
+- 退群、群公告、邀请/移除群成员、改群名和群内昵称即使开启写入，也必须在工具参数里显式传 `confirm=true`。
+- 管理台会提供联系人、消息、多媒体、日志和本地媒体代理能力，端口不要裸露到公网。
+- 如果必须远程访问，请使用 HTTPS、反向代理鉴权、IP 白名单或 VPN。不要把微信数据目录、MCP endpoint 或 Dashboard 直接暴露给不受信任网络。
 
 ## 数据库读取说明
 
@@ -179,6 +217,13 @@ bot 服务以 root 运行，是为了读取 `/proc/<wechat-pid>/mem`。微信、
 - `visual_message.*`：OCR/YOLO 视觉读取兜底配置。
 - `mcp.host` / `mcp.port`：容器内 MCP 监听地址和端口。
 - `mqtt.host`：旧式/远程 MQTT 转发；留空表示关闭。
+
+常用环境变量：
+
+- `WECHAT_AI_DASHBOARD_USERNAME` / `WECHAT_AI_DASHBOARD_PASSWORD`：管理台 Basic Auth 账号密码。
+- `WECHAT_AI_MCP_TOKEN`：MCP Bearer token，必须改掉默认值。
+- `WECHAT_AI_MCP_ADMIN_ENABLED`：是否允许 MCP 执行本地运维类变更，默认 `false`。
+- `WECHAT_AI_MCP_WRITE_ENABLED`：是否允许 MCP 执行真实微信写操作，默认 `false`。
 
 ## 架构
 
