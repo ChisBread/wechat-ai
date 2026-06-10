@@ -1038,6 +1038,8 @@
         ['图片 DAT Key', media.dat_key_configured ? info('已配置') : warn('未配置')],
         ['图片 XOR Key', esc(media.dat_xor_key ?? '')],
         ['连接数', esc(db.open_connections ?? '')],
+        ['连续轮询错误', esc(db.consecutive_poll_errors ?? '')],
+        ['上次自动恢复', esc(db.last_auto_refresh_at ? new Date(db.last_auto_refresh_at * 1000).toLocaleString() : '')],
         ['上次扫描', esc(db.last_scan_at ? new Date(db.last_scan_at * 1000).toLocaleString() : '')],
         ['最近错误', esc(db.last_error || db.error || '')]
       ];

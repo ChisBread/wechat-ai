@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import logging
 import threading
 import time
@@ -91,6 +92,8 @@ class LinuxDatabaseService:
         self._room_by_md5: dict[str, Contact] = {}
         self._chat_rooms: dict[str, ChatRoom] = {}
         self._lock = threading.RLock()
+        self._consecutive_poll_errors = 0
+        self._last_auto_refresh_at = 0.0
 
         self.is_available = False
         self.last_error = ""
@@ -111,9 +114,10 @@ class LinuxDatabaseService:
                 len(self._keys),
             )
 
-    def refresh(self) -> dict[str, Any]:
+    def refresh(self, *, preserve_sequences: bool = False) -> dict[str, Any]:
         """Refresh discovery, keyring, caches, and polling baselines."""
         with self._lock:
+            previous_sequences = dict(self._table_sequences) if preserve_sequences else {}
             for conn in self._connections.values():
                 try:
                     conn.close()
@@ -121,6 +125,7 @@ class LinuxDatabaseService:
                     pass
             self._connections.clear()
             self.last_error = ""
+            self._consecutive_poll_errors = 0
             self._discover_accounts()
             if self.scan_keys_enabled:
                 self.rescan_keys()
@@ -133,7 +138,7 @@ class LinuxDatabaseService:
             self.load_contacts()
             self.load_chat_rooms()
             self.load_message_username_map()
-            self._prime_message_sequences()
+            self._prime_message_sequences(previous_sequences)
             self.is_available = bool(self._message_tables())
             if not self.is_available and not self.last_error:
                 self.last_error = "no open message tables"
@@ -172,8 +177,23 @@ class LinuxDatabaseService:
         params: tuple = (),
     ) -> list[tuple]:
         with self._lock:
-            conn = self._connection(Path(db_path))
-            return list(conn.execute(query, params).fetchall())
+            db_path = Path(db_path)
+            for attempt in range(2):
+                try:
+                    conn = self._connection(db_path)
+                    return list(conn.execute(query, params).fetchall())
+                except Exception as exc:
+                    if attempt or not self._is_recoverable_database_error(exc):
+                        raise
+                    self.logger.warning(
+                        "Database query failed; reopening %s once: %s: %s",
+                        db_path.name,
+                        type(exc).__name__,
+                        exc,
+                    )
+                    self._drop_connection(db_path)
+                    time.sleep(0.05)
+            return []
 
     def get_db_path_by_username(self, username: str) -> list[Path]:
         return sorted(self._message_username_map.get(username, set()))
@@ -201,15 +221,34 @@ class LinuxDatabaseService:
                 return []
             self._refresh_message_maps_if_needed()
             messages: list[tuple[str, tuple]] = []
+            failure_count = 0
+            table_count = 0
             for db_path, table_name, _username in self._message_tables():
+                table_count += 1
                 try:
                     rows = self._fetch_new_rows(db_path, table_name)
                 except Exception as exc:
+                    failure_count += 1
                     self.last_error = f"{table_name}: {type(exc).__name__}: {exc}"
                     self.logger.debug("check_new_messages failed", exc_info=True)
                     continue
                 messages.extend((table_name, row) for row in rows)
             messages.sort(key=lambda item: (item[1][3] or 0, item[1][5] or 0))
+            if failure_count:
+                self._consecutive_poll_errors += 1
+                self.logger.warning(
+                    "Database message table polls failed (%s/%s tables, %s consecutive): %s",
+                    failure_count,
+                    table_count,
+                    self._consecutive_poll_errors,
+                    self.last_error,
+                )
+                if self._consecutive_poll_errors >= 3:
+                    self._auto_refresh_after_poll_errors()
+            else:
+                if self._consecutive_poll_errors and self.last_error.startswith("Msg_"):
+                    self.last_error = ""
+                self._consecutive_poll_errors = 0
             return messages
 
     def get_message_by_server_id(
@@ -601,6 +640,10 @@ class LinuxDatabaseService:
             "contacts": len(self._contact_by_username),
             "rooms": len(self._room_by_md5),
             "last_scan_at": int(self.last_scan_at) if self.last_scan_at else 0,
+            "consecutive_poll_errors": self._consecutive_poll_errors,
+            "last_auto_refresh_at": int(self._last_auto_refresh_at)
+            if self._last_auto_refresh_at
+            else 0,
             "key_scan": self._scan_result.redacted(),
             "last_error": self.last_error,
         }
@@ -677,19 +720,95 @@ class LinuxDatabaseService:
             conn = self._driver.connect(str(db_path), check_same_thread=False)
         except TypeError:
             conn = self._driver.connect(str(db_path))
-        conn.execute(f"PRAGMA key = \"x'{key}'\"")
-        conn.execute("PRAGMA busy_timeout = 1000")
-        conn.execute("PRAGMA query_only = ON")
-        conn.execute("select count(*) from sqlite_master").fetchone()
+        try:
+            conn.execute(f"PRAGMA key = \"x'{key}'\"")
+            conn.execute("PRAGMA busy_timeout = 1000")
+            conn.execute("PRAGMA query_only = ON")
+            conn.execute("select count(*) from sqlite_master").fetchone()
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            raise
         self._connections[db_path] = conn
         return conn
 
-    def _prime_message_sequences(self) -> None:
+    def _drop_connection(self, db_path: Path) -> None:
+        conn = self._connections.pop(Path(db_path), None)
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _auto_refresh_after_poll_errors(self) -> None:
+        now = time.time()
+        interval = max(2.0, float(self.key_retry_interval or 10.0))
+        if now - self._last_auto_refresh_at < interval:
+            return
+        self._last_auto_refresh_at = now
+        self.logger.warning("Refreshing database service after repeated poll errors")
+        try:
+            self._refresh_preserving_sequences()
+        except Exception as exc:
+            self.last_error = f"auto_refresh: {type(exc).__name__}: {exc}"
+            self.logger.warning("Database auto refresh failed: %s", exc, exc_info=True)
+
+    def _refresh_preserving_sequences(self) -> dict[str, Any]:
+        try:
+            parameters = inspect.signature(self.refresh).parameters
+        except (TypeError, ValueError):
+            return self.refresh()
+        supports_preserve_sequences = "preserve_sequences" in parameters or any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+        if supports_preserve_sequences:
+            return self.refresh(preserve_sequences=True)
+        return self.refresh()
+
+    def _is_recoverable_database_error(self, exc: Exception) -> bool:
+        module = type(exc).__module__.lower()
+        name = type(exc).__name__.lower()
+        text = str(exc).lower()
+        database_exception = (
+            "sqlite" in module
+            or "sqlcipher" in module
+            or "database" in name
+            or "sqlite" in name
+            or "sqlcipher" in name
+        )
+        return database_exception and any(
+            marker in text
+            for marker in (
+                "attempt to write a readonly database",
+                "database is busy",
+                "database is locked",
+                "database disk image is malformed",
+                "file is not a database",
+                "file is encrypted",
+                "interrupted",
+                "disk i/o error",
+                "not an error",
+                "sql logic error",
+                "schema has changed",
+                "unable to open database file",
+            )
+        )
+
+    def _prime_message_sequences(
+        self,
+        preserved_sequences: Optional[dict[tuple[Path, str], int]] = None,
+    ) -> None:
+        preserved_sequences = preserved_sequences or {}
         self._table_sequences.clear()
         for db_path, table_name, _username in self._message_tables():
-            self._table_sequences[(db_path, table_name)] = self._max_local_id(
-                db_path, table_name
-            )
+            key = (db_path, table_name)
+            if key in preserved_sequences:
+                self._table_sequences[key] = preserved_sequences[key]
+            else:
+                self._table_sequences[key] = self._max_local_id(db_path, table_name)
 
     def _max_local_id(self, db_path: Path, table_name: str) -> int:
         try:
