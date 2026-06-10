@@ -53,7 +53,10 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
 
     @mcp.custom_route(f"{prefix}/api/status", methods=["GET"], include_in_schema=False)
     async def debug_status(request: Request) -> JSONResponse:
-        show_sensitive = bool(_config_get(config, "debug.show_sensitive", False))
+        show_sensitive = _parse_bool(
+            request.query_params.get("show_sensitive"),
+            default=_parse_bool(_config_get(config, "debug.show_sensitive", True), default=True),
+        )
         return JSONResponse(build_debug_status(bot, config, show_sensitive=show_sensitive))
 
     @mcp.custom_route(f"{prefix}/api/database/rescan", methods=["POST"], include_in_schema=False)
@@ -101,7 +104,7 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
             {
                 "ok": ok,
                 "error": "" if ok else "window reset failed",
-                "window": _window_status(window_manager),
+                "window": _window_status(window_manager, show_sensitive=True),
             },
             status_code=200 if ok else 500,
         )
@@ -116,14 +119,72 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
             limit = int(request.query_params.get("limit", "30"))
         except ValueError:
             limit = 30
-        limit = max(1, min(limit, 100))
-        contacts = _search_contacts(database_service, query, limit=limit)
+        contact_type = str(request.query_params.get("type", "any") or "any").strip().lower()
+        limit = max(1, min(limit, 500))
+        contacts = _search_contacts(database_service, query, limit=limit, contact_type=contact_type)
         return JSONResponse(
             {
                 "ok": True,
                 "query": query,
                 "count": len(contacts),
                 "contacts": [_contact_payload(contact) for contact in contacts],
+            }
+        )
+
+    @mcp.custom_route(f"{prefix}/api/chats", methods=["GET"], include_in_schema=False)
+    async def debug_chats(request: Request) -> JSONResponse:
+        database_service = getattr(bot, "database_service", None)
+        if not database_service or not getattr(database_service, "is_available", False):
+            return JSONResponse({"ok": False, "error": "database service unavailable"}, status_code=503)
+        try:
+            limit = int(request.query_params.get("limit", "80"))
+        except ValueError:
+            limit = 80
+        try:
+            offset = int(request.query_params.get("offset", "0"))
+        except ValueError:
+            offset = 0
+        limit = max(1, min(limit, 200))
+        offset = max(0, offset)
+        chats = _recent_chat_payloads(database_service, limit=limit, offset=offset)
+        return JSONResponse(
+            {
+                "ok": True,
+                "count": len(chats),
+                "limit": limit,
+                "offset": offset,
+                "chats": chats,
+            }
+        )
+
+    @mcp.custom_route(f"{prefix}/api/contact/detail", methods=["GET"], include_in_schema=False)
+    async def debug_contact_detail(request: Request) -> JSONResponse:
+        database_service = getattr(bot, "database_service", None)
+        if not database_service or not getattr(database_service, "is_available", False):
+            return JSONResponse({"ok": False, "error": "database service unavailable"}, status_code=503)
+        username = str(request.query_params.get("username", "")).strip()
+        contact_name = str(request.query_params.get("contact", "")).strip()
+        contact = _resolve_contact(database_service, username or contact_name)
+        if not contact:
+            return JSONResponse({"ok": False, "error": "contact not found"}, status_code=404)
+        members = []
+        if bool(getattr(contact, "is_chatroom", False)):
+            try:
+                members = [
+                    _contact_payload(member)
+                    for member in database_service.get_room_member_list(contact.username)
+                ]
+            except Exception:
+                members = []
+        return JSONResponse(
+            {
+                "ok": True,
+                "contact": _contact_payload(contact),
+                "members": members,
+                "member_count": len(members),
+                "has_message_table": bool(
+                    contact.username in (getattr(database_service, "_message_username_map", {}) or {})
+                ),
             }
         )
 
@@ -163,6 +224,43 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
                     _text_message_payload(database_service, row)
                     for row in messages
                 ],
+            }
+        )
+
+    @mcp.custom_route(f"{prefix}/api/messages/recent", methods=["GET"], include_in_schema=False)
+    async def debug_recent_messages(request: Request) -> JSONResponse:
+        database_service = getattr(bot, "database_service", None)
+        if not database_service or not getattr(database_service, "is_available", False):
+            return JSONResponse({"ok": False, "error": "database service unavailable"}, status_code=503)
+        username = str(request.query_params.get("username", "")).strip()
+        contact_name = str(request.query_params.get("contact", "")).strip()
+        contact = _resolve_contact(database_service, username or contact_name)
+        if not contact:
+            return JSONResponse({"ok": False, "error": "contact not found"}, status_code=404)
+        try:
+            limit = int(request.query_params.get("limit", "80"))
+        except ValueError:
+            limit = 80
+        limit = max(1, min(limit, 300))
+        parse_media = str(request.query_params.get("parse_media", "true")).lower() != "false"
+        try:
+            rows = database_service.get_messages_by_username(contact.username, count=limit)
+            rows.reverse()
+            messages = [
+                _rich_message_payload(database_service, getattr(bot, "message_factory_service", None), contact, row, parse_media=parse_media)
+                for row in rows
+            ]
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"},
+                status_code=500,
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "contact": _contact_payload(contact),
+                "count": len(messages),
+                "messages": messages,
             }
         )
 
@@ -275,6 +373,49 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
             }
         )
 
+    @mcp.custom_route(f"{prefix}/api/rpa/action", methods=["POST"], include_in_schema=False)
+    async def debug_rpa_action(request: Request) -> JSONResponse:
+        try:
+            payload = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "invalid json body"}, status_code=400)
+        action_type = str(payload.get("action_type") or "").strip()
+        action_data = payload.get("action_data") or {}
+        if not action_type:
+            return JSONResponse({"ok": False, "error": "action_type is required"}, status_code=400)
+        if not isinstance(action_data, dict):
+            return JSONResponse({"ok": False, "error": "action_data must be an object"}, status_code=400)
+        try:
+            wait_seconds = float(payload.get("wait_seconds", 8))
+        except (TypeError, ValueError):
+            wait_seconds = 8
+        wait_seconds = max(0, min(wait_seconds, 30))
+        queue = getattr(bot, "rpa_task_queue", None)
+        if queue is None:
+            return JSONResponse({"ok": False, "error": "rpa queue unavailable"}, status_code=503)
+        try:
+            from wechat_ai_bot.mcp.dispatchers import QueueCommandDispatcher
+
+            dispatcher = QueueCommandDispatcher(bot, getattr(bot, "user_info", None))
+            result = dispatcher.dispatch_rpa_wait(action_type, action_data, timeout=wait_seconds)
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"},
+                status_code=500,
+            )
+        ok = result.get("status") in {"queued", "executed", "timeout"}
+        if result.get("status") == "failed":
+            ok = False
+        return JSONResponse(
+            {
+                "ok": ok,
+                "action_type": action_type,
+                "action_data": action_data,
+                **result,
+            },
+            status_code=200 if ok else 500,
+        )
+
     @mcp.custom_route(f"{prefix}/api/logs", methods=["GET"], include_in_schema=False)
     async def debug_logs(request: Request) -> JSONResponse:
         try:
@@ -329,6 +470,7 @@ def build_debug_status(
     db_report = _database_status(
         _config_get(config, "debug.xwechat_files_root", "/config/xwechat_files"),
         database_service,
+        show_sensitive=show_sensitive,
     )
 
     return {
@@ -354,7 +496,7 @@ def build_debug_status(
             "visual": _visual_status(visual_service, show_sensitive),
             "mqtt": _mqtt_status(mqtt_service),
         },
-        "window": _window_status(window_manager),
+        "window": _window_status(window_manager, show_sensitive=show_sensitive),
         "yolo": {
             "model_loaded": bool(getattr(image_processor, "yolo", None)),
             "model_path": str(getattr(image_processor, "model_path", "")),
@@ -362,7 +504,7 @@ def build_debug_status(
             "imgsz_actual": getattr(visual_service, "_last_yolo_imgsz", None),
             "stride": getattr(visual_service, "yolo_stride", None),
         },
-        "database": db_report,
+        "database": _expand_database_status(database_service, db_report, show_sensitive=show_sensitive),
         "plugins": _plugin_status(plugin_manager),
         "debug": {
             "raw_screenshot_enabled": bool(_config_get(config, "debug.allow_raw_screenshot", False)),
@@ -491,15 +633,40 @@ def _resolve_contact(database_service: Any, name: str) -> Any:
     return matches[0] if matches else None
 
 
-def _search_contacts(database_service: Any, query: str, *, limit: int) -> list[Any]:
-    if not database_service or not query:
+def _search_contacts(
+    database_service: Any,
+    query: str,
+    *,
+    limit: int,
+    contact_type: str = "any",
+) -> list[Any]:
+    if not database_service:
         return []
+    contact_type = contact_type if contact_type in {"any", "chatroom", "contact"} else "any"
+    if not query:
+        contacts = list((getattr(database_service, "_contact_by_username", {}) or {}).values())
+        contacts = [
+            contact
+            for contact in contacts
+            if _contact_type_matches(contact, contact_type)
+        ]
+        contacts.sort(
+            key=lambda contact: (
+                0 if getattr(contact, "username", "") in (getattr(database_service, "_message_username_map", {}) or {}) else 1,
+                str(getattr(contact, "display_name", "") or getattr(contact, "username", "")).lower(),
+            )
+        )
+        return contacts[:limit]
     results: list[Any] = []
     direct = _resolve_contact(database_service, query)
-    if direct:
+    if direct and _contact_type_matches(direct, contact_type):
         results.append(direct)
     try:
-        results.extend(database_service.get_contact_by_display_name(query))
+        results.extend(
+            contact
+            for contact in database_service.get_contact_by_display_name(query)
+            if _contact_type_matches(contact, contact_type)
+        )
     except Exception:
         pass
 
@@ -514,6 +681,8 @@ def _search_contacts(database_service: Any, query: str, *, limit: int) -> list[A
             getattr(contact, "nick_name", ""),
             getattr(contact, "alias", ""),
         ]
+        if not _contact_type_matches(contact, contact_type):
+            continue
         if any(needle in str(value).lower() for value in fields if value):
             results.append(contact)
 
@@ -530,6 +699,14 @@ def _search_contacts(database_service: Any, query: str, *, limit: int) -> list[A
     return deduped
 
 
+def _contact_type_matches(contact: Any, contact_type: str) -> bool:
+    if contact_type == "chatroom":
+        return bool(getattr(contact, "is_chatroom", False))
+    if contact_type == "contact":
+        return not bool(getattr(contact, "is_chatroom", False))
+    return True
+
+
 def _contact_payload(contact: Any) -> dict[str, Any]:
     if not contact:
         return {}
@@ -543,6 +720,12 @@ def _contact_payload(contact: Any) -> dict[str, Any]:
         "alias": str(getattr(contact, "alias", "") or ""),
         "is_chatroom": bool(getattr(contact, "is_chatroom", False)),
         "local_type": getattr(contact, "local_type", None),
+        "room_remark": str(getattr(contact, "room_remark", "") or ""),
+        "description": str(getattr(contact, "description", "") or ""),
+        "head_img_md5": str(getattr(contact, "head_img_md5", "") or ""),
+        "delete_flag": getattr(contact, "delete_flag", None),
+        "verify_flag": getattr(contact, "verify_flag", None),
+        "chat_room_notify": getattr(contact, "chat_room_notify", None),
     }
 
 
@@ -562,6 +745,90 @@ def _text_message_payload(database_service: Any, row: tuple) -> dict[str, Any]:
         "time": _format_timestamp(create_time),
         "server_id": str(server_id or ""),
     }
+
+
+def _recent_chat_payloads(database_service: Any, *, limit: int, offset: int = 0) -> list[dict[str, Any]]:
+    username_map = getattr(database_service, "_message_username_map", {}) or {}
+    chats: list[dict[str, Any]] = []
+    for username in username_map.keys():
+        try:
+            rows = database_service.get_messages_by_username(username, count=1)
+        except Exception:
+            continue
+        if not rows:
+            continue
+        row = rows[0]
+        contact = database_service.get_contact_by_username(username)
+        payload = {
+            "contact": _contact_payload(contact) if contact else {"username": username, "display_name": username},
+            "last_message": _rich_message_payload(database_service, None, contact, row, parse_media=False),
+        }
+        payload["sort_seq"] = row[3] if len(row) > 3 else None
+        payload["last_time"] = row[5] if len(row) > 5 else None
+        chats.append(payload)
+    chats.sort(
+        key=lambda item: (
+            item.get("sort_seq") or 0,
+            item.get("last_time") or 0,
+        ),
+        reverse=True,
+    )
+    return chats[offset: offset + limit]
+
+
+def _rich_message_payload(
+    database_service: Any,
+    factory_service: Any,
+    contact: Any,
+    row: tuple,
+    *,
+    parse_media: bool,
+) -> dict[str, Any]:
+    local_type = row[2] if len(row) > 2 else None
+    sender = None
+    sender_id = row[4] if len(row) > 4 else None
+    db_path = row[17] if len(row) > 17 else None
+    try:
+        sender = database_service.get_contact_by_sender_id(sender_id, db_path)
+    except Exception:
+        sender = None
+    upload_status = row[7] if len(row) > 7 else None
+    current_account = getattr(getattr(database_service, "user_info", None), "account", "")
+    direction = "out" if bool(
+        (upload_status is not None and int(upload_status or 0) > 0)
+        or (sender and getattr(sender, "username", "") == current_account)
+    ) else "in"
+    payload: dict[str, Any] = {
+        "local_id": row[0] if len(row) > 0 else None,
+        "server_id": str(row[1] if len(row) > 1 else ""),
+        "type": local_type,
+        "type_name": _message_type_name(local_type),
+        "sort_seq": row[3] if len(row) > 3 else None,
+        "status": row[6] if len(row) > 6 else None,
+        "upload_status": upload_status,
+        "download_status": row[8] if len(row) > 8 else None,
+        "sender_username": getattr(sender, "username", "") if sender else "",
+        "sender_display": getattr(sender, "display_name", "") if sender else "",
+        "contact_username": getattr(contact, "username", "") if contact else "",
+        "contact_display": getattr(contact, "display_name", "") if contact else "",
+        "create_time": row[5] if len(row) > 5 else None,
+        "time": _format_timestamp(row[5] if len(row) > 5 else None),
+        "direction": direction,
+        "db_path": str(db_path or ""),
+        "raw_content": _truncate_text(str(row[12] if len(row) > 12 else ""), 1200),
+    }
+    if local_type in (1, 2):
+        payload["text"] = _truncate_text(str(row[12] if len(row) > 12 else ""), 4000)
+        return payload
+    if not parse_media:
+        payload["text"] = f"[{payload['type_name']}]"
+        return payload
+    table_name = f"Msg_{hashlib.md5(str(getattr(contact, 'username', '') or '').encode()).hexdigest()}"
+    media_payload = _factory_message_payload(factory_service, table_name, row)
+    payload.update(media_payload)
+    if not payload.get("text"):
+        payload["text"] = media_payload.get("raw_content") or media_payload.get("factory_error") or f"[{payload['type_name']}]"
+    return payload
 
 
 def _rows_with_table(database_service: Any, username: str, rows: list[tuple]) -> list[tuple[str, tuple]]:
@@ -647,25 +914,25 @@ def _truncate_text(text: str, limit: int) -> str:
     return text[: max(0, limit - 3)] + "..."
 
 
-def _database_status(root: str, database_service: Any = None) -> dict[str, Any]:
+def _database_status(root: str, database_service: Any = None, *, show_sensitive: bool = False) -> dict[str, Any]:
     if database_service and hasattr(database_service, "get_status"):
         try:
             status = database_service.get_status()
-            status["discovery"] = _database_discovery_status(root)
+            status["discovery"] = _database_discovery_status(root, show_sensitive=show_sensitive)
             return status
         except Exception as exc:
             return {"error": f"{type(exc).__name__}: {exc}"}
-    return _database_discovery_status(root)
+    return _database_discovery_status(root, show_sensitive=show_sensitive)
 
 
-def _database_discovery_status(root: str) -> dict[str, Any]:
+def _database_discovery_status(root: str, *, show_sensitive: bool = False) -> dict[str, Any]:
     try:
         report = LinuxDatabaseDiscovery(root).scan()
         accounts = []
         for account in report.accounts:
             accounts.append(
                 {
-                    "account": mask_value(account.account_id),
+                    "account": account.account_id if show_sensitive else mask_value(account.account_id),
                     "storage_suffix": account.storage_suffix,
                     "encrypted_databases": len(account.encrypted_databases),
                     "plaintext_databases": len(account.plaintext_databases),
@@ -689,6 +956,29 @@ def _database_discovery_status(root: str) -> dict[str, Any]:
         return {"error": f"{type(exc).__name__}: {exc}"}
 
 
+def _expand_database_status(
+    database_service: Any,
+    report: dict[str, Any],
+    *,
+    show_sensitive: bool,
+) -> dict[str, Any]:
+    if not show_sensitive or not database_service or not isinstance(report, dict):
+        return report
+    expanded = dict(report)
+    primary = getattr(database_service, "_primary_account", None)
+    if primary:
+        account_id = getattr(primary, "account_id", None)
+        account_dir = getattr(primary, "account_dir", None)
+        db_storage_dir = getattr(primary, "db_storage_dir", None)
+        if account_id:
+            expanded["primary_account"] = str(account_id)
+        if account_dir:
+            expanded["account_dir"] = str(account_dir)
+        if db_storage_dir:
+            expanded["db_storage_dir"] = str(db_storage_dir)
+    return expanded
+
+
 def _process_status() -> dict[str, Any]:
     return {
         "wechat": _pgrep_exact("wechat"),
@@ -697,12 +987,13 @@ def _process_status() -> dict[str, Any]:
     }
 
 
-def _window_status(window_manager: Any) -> dict[str, Any]:
+def _window_status(window_manager: Any, *, show_sensitive: bool = False) -> dict[str, Any]:
     if not window_manager:
         return {}
     refresh = getattr(window_manager, "refresh_window_geometry", None)
     if callable(refresh):
         refresh()
+    current_session = str(_safe_call(window_manager, "get_current_session_name") or "")
     return {
         "current_window": bool(getattr(window_manager, "current_window", None)),
         "state": getattr(window_manager, "last_window_state", ""),
@@ -711,9 +1002,7 @@ def _window_status(window_manager: Any) -> dict[str, Any]:
         "actual_geometry": getattr(window_manager, "actual_window_geometry", {}),
         "aligned": bool(getattr(window_manager, "window_aligned", False)),
         "window_id": getattr(window_manager, "window_id", None),
-        "current_session": mask_value(
-            str(_safe_call(window_manager, "get_current_session_name") or "")
-        ),
+        "current_session": current_session if show_sensitive else mask_value(current_session),
         "sidebar_width": getattr(window_manager, "SIDE_BAR_WIDTH", 0),
         "session_list_width": getattr(window_manager, "SESSION_LIST_WIDTH", 0),
         "title_bar_height": getattr(window_manager, "TITLE_BAR_HEIGHT", 0),
@@ -852,6 +1141,19 @@ def _config_get(config: Any, key: str, default: Any = None) -> Any:
             return default
         current = current[part]
     return current
+
+
+def _parse_bool(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
 
 
 def mask_value(value: str, *, keep_start: int = 2, keep_end: int = 2) -> str:

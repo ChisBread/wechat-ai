@@ -280,9 +280,224 @@
       min-height: 22px;
       color: var(--muted);
     }
+    .wechat-shell {
+      display: grid;
+      grid-template-columns: 310px minmax(420px, 1fr) 330px;
+      gap: 12px;
+      height: calc(100vh - 92px);
+      min-height: 640px;
+    }
+    .wechat-shell section {
+      display: flex;
+      min-height: 0;
+      flex-direction: column;
+    }
+    .wechat-scroll {
+      overflow: auto;
+      min-height: 0;
+    }
+    .wechat-search {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      background: #f9fbfd;
+    }
+    .wechat-filter {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      background: #f9fbfd;
+    }
+    .wechat-mode {
+      min-width: 0;
+      padding: 0 6px;
+      border-color: #c5d0dc;
+      background: #fff;
+      color: #344255;
+    }
+    .wechat-mode.active {
+      border-color: var(--blue);
+      background: #eaf1ff;
+      color: var(--blue);
+      font-weight: 700;
+    }
+    .chat-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .chat-item {
+      display: grid;
+      grid-template-columns: 42px minmax(0, 1fr);
+      gap: 10px;
+      width: 100%;
+      padding: 10px;
+      border: 0;
+      border-bottom: 1px solid #edf1f5;
+      border-radius: 0;
+      text-align: left;
+      background: #fff;
+      color: var(--text);
+      min-height: 64px;
+    }
+    .chat-item:hover,
+    .chat-item.active {
+      background: #eef5ff;
+      color: var(--text);
+      border-color: #d6e6ff;
+    }
+    .avatar {
+      width: 42px;
+      height: 42px;
+      border-radius: 6px;
+      background: #dbeafe;
+      color: #174ea6;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      overflow: hidden;
+    }
+    .chat-main {
+      min-width: 0;
+    }
+    .chat-topline {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 0;
+      margin-bottom: 3px;
+    }
+    .chat-name {
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .chat-time {
+      flex: 0 0 auto;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .chat-preview {
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .chat-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: #f9fbfd;
+    }
+    .chat-header-title {
+      min-width: 0;
+    }
+    .chat-header-title strong {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .chat-messages {
+      flex: 1;
+      padding: 12px;
+      overflow: auto;
+      background: #f4f6f8;
+    }
+    .bubble-row {
+      display: flex;
+      margin: 8px 0;
+    }
+    .bubble-row.out {
+      justify-content: flex-end;
+    }
+    .bubble-wrap {
+      max-width: min(72%, 760px);
+    }
+    .bubble-meta {
+      margin: 0 4px 3px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .bubble-row.out .bubble-meta {
+      text-align: right;
+    }
+    .bubble {
+      padding: 9px 11px;
+      border: 1px solid #dbe3ec;
+      border-radius: 8px;
+      background: #fff;
+      white-space: pre-wrap;
+      line-height: 1.48;
+      word-break: break-word;
+    }
+    .bubble-row.out .bubble {
+      background: #dff4e8;
+      border-color: #b6e0ca;
+    }
+    .bubble-extra {
+      margin-top: 7px;
+      padding-top: 7px;
+      border-top: 1px solid rgba(100, 116, 139, 0.18);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .composer {
+      border-top: 1px solid var(--line);
+      padding: 10px;
+      background: #fff;
+    }
+    .composer textarea {
+      min-height: 90px;
+    }
+    .composer-actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      margin-top: 8px;
+    }
+    .detail-block {
+      padding: 10px 12px;
+      border-bottom: 1px solid #edf1f5;
+    }
+    .member-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+      gap: 8px;
+    }
+    .member-chip {
+      min-width: 0;
+      padding: 7px 8px;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+      background: #fff;
+      font-size: 12px;
+      word-break: break-word;
+    }
     @media (max-width: 960px) {
       header { align-items: flex-start; flex-direction: column; }
       .shell { grid-template-columns: 1fr; }
+      .wechat-shell {
+        grid-template-columns: 1fr;
+        height: auto;
+      }
+      .wechat-shell section {
+        min-height: 420px;
+      }
+      .bubble-wrap {
+        max-width: 88%;
+      }
       nav {
         position: sticky;
         top: 72px;
@@ -322,6 +537,7 @@
   <div class="shell">
     <nav>
       <button class="nav-btn active" data-tab="overview">总览</button>
+      <button class="nav-btn" data-tab="wechat">微信</button>
       <button class="nav-btn" data-tab="database">数据库</button>
       <button class="nav-btn" data-tab="messages">消息</button>
       <button class="nav-btn" data-tab="rpa">RPA</button>
@@ -339,6 +555,52 @@
           <section class="span-4"><h2>进程</h2><div id="processes" class="body"></div></section>
           <section class="span-4"><h2>插件</h2><div id="plugins" class="body"></div></section>
           <section class="span-12"><h2>数据库快照</h2><div id="databaseOverview" class="body"></div></section>
+        </div>
+      </div>
+
+      <div id="wechat" class="tab">
+        <div class="wechat-shell">
+          <section>
+            <h2>会话</h2>
+            <div class="wechat-search">
+              <input id="wechatSearch" placeholder="搜索联系人、群聊、wxid" autocomplete="off">
+              <button id="wechatSearchBtn">搜索</button>
+            </div>
+            <div class="wechat-filter">
+              <button class="wechat-mode active" data-wechat-mode="recent">最近</button>
+              <button class="wechat-mode" data-wechat-mode="contacts">通讯录</button>
+              <button class="wechat-mode" data-wechat-mode="rooms">群聊</button>
+            </div>
+            <div id="wechatListStatus" class="statusline" style="padding: 8px 10px;"></div>
+            <div id="wechatChatList" class="chat-list wechat-scroll"></div>
+          </section>
+          <section>
+            <div class="chat-header">
+              <div class="chat-header-title">
+                <strong id="wechatChatTitle">选择会话</strong>
+                <div id="wechatChatSub" class="sub">最近会话会显示在左侧</div>
+              </div>
+              <div class="actions">
+                <button id="wechatReloadChat">刷新消息</button>
+                <button id="wechatLoadMedia">媒体</button>
+              </div>
+            </div>
+            <div id="wechatMessages" class="chat-messages"></div>
+            <div class="composer">
+              <textarea id="wechatComposer" placeholder="输入消息，点击发送文本"></textarea>
+              <div class="composer-actions">
+                <div id="wechatSendStatus" class="statusline"></div>
+                <div class="actions">
+                  <input id="wechatAtUser" placeholder="@ 用户名" style="width: 150px;">
+                  <button id="wechatSendText" class="primary">发送文本</button>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section>
+            <h2>详情</h2>
+            <div id="wechatDetail" class="wechat-scroll"></div>
+          </section>
         </div>
       </div>
 
@@ -411,7 +673,64 @@
             </div>
             <div id="rpaStatus" class="statusline"></div>
           </div></section>
-          <section class="span-7"><h2>RPA 状态</h2><div id="rpaState" class="body"></div></section>
+          <section class="span-7"><h2>文件与拍一拍</h2><div class="body">
+            <div class="row">
+              <div class="field">
+                <label for="fileTarget">目标</label>
+                <input id="fileTarget" autocomplete="off">
+              </div>
+              <div class="field wide">
+                <label for="filePath">容器内文件路径</label>
+                <input id="filePath" autocomplete="off" placeholder="/config/...">
+              </div>
+              <div class="field full actions">
+                <button id="sendFile" class="primary">发送文件</button>
+              </div>
+            </div>
+            <div class="row">
+              <div class="field">
+                <label for="patRoom">群聊，可空</label>
+                <input id="patRoom" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="patUser">用户</label>
+                <input id="patUser" autocomplete="off">
+              </div>
+              <div class="field actions">
+                <button id="sendPat">拍一拍</button>
+              </div>
+            </div>
+            <div id="rpaActionStatus" class="statusline"></div>
+          </div></section>
+          <section class="span-6"><h2>群管理</h2><div class="body">
+            <div class="row">
+              <div class="field full">
+                <label for="roomTarget">群聊</label>
+                <input id="roomTarget" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="roomMember">成员 / 联系人</label>
+                <input id="roomMember" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="roomNewName">新群名</label>
+                <input id="roomNewName" autocomplete="off">
+              </div>
+              <div class="field">
+                <label for="roomNickName">我的群昵称</label>
+                <input id="roomNickName" autocomplete="off">
+              </div>
+              <div class="field full actions">
+                <button id="inviteRoomMember">邀请成员</button>
+                <button id="removeRoomMember" class="danger">移除成员</button>
+                <button id="renameRoom">改群名</button>
+                <button id="renameRoomNick">改我的群昵称</button>
+                <button id="leaveRoom" class="danger">退群</button>
+              </div>
+            </div>
+            <div id="roomActionStatus" class="statusline"></div>
+          </div></section>
+          <section class="span-6"><h2>RPA 状态</h2><div id="rpaState" class="body"></div></section>
         </div>
       </div>
 
@@ -459,6 +778,9 @@
     const table = (rows) => `<table class="kv"><tbody>${rows.map(([k, v]) => `<tr><th>${esc(k)}</th><td>${v}</td></tr>`).join("")}</tbody></table>`;
     const json = (v) => `<span class="mono">${esc(JSON.stringify(v, null, 2))}</span>`;
     let statusData = null;
+    let currentChat = null;
+    let currentChats = [];
+    let wechatMode = 'recent';
 
     document.querySelectorAll('.nav-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -466,6 +788,7 @@
         document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
         btn.classList.add('active');
         $(btn.dataset.tab).classList.add('active');
+        if (btn.dataset.tab === 'wechat') loadWechatList().catch(err => $('wechatListStatus').textContent = err.message);
         if (btn.dataset.tab === 'logs') loadLogs().catch(showHeaderError);
       });
     });
@@ -605,7 +928,7 @@
     }
 
     async function loadStatus() {
-      const data = await fetchJson(apiPath('/api/status'));
+      const data = await fetchJson(`${apiPath('/api/status')}?show_sensitive=1`);
       renderStatus(data);
     }
 
@@ -664,6 +987,7 @@
         <div class="actions" style="margin-top:8px;">
           <button data-fill-msg="${esc(c.username)}">用于消息查询</button>
           <button data-fill-rpa="${esc(c.display_name)}">用于 RPA</button>
+          <button data-open-chat="${esc(c.username)}">打开会话</button>
         </div>
       </div>`;
     }
@@ -671,9 +995,193 @@
     document.addEventListener('click', (event) => {
       const msgTarget = event.target.getAttribute?.('data-fill-msg');
       const rpaTarget = event.target.getAttribute?.('data-fill-rpa');
+      const openChat = event.target.getAttribute?.('data-open-chat');
+      const chatIndex = event.target.closest?.('.chat-item')?.getAttribute('data-chat-index');
       if (msgTarget) $('msgContact').value = msgTarget;
-      if (rpaTarget) $('rpaTarget').value = rpaTarget;
+      if (rpaTarget) fillRpaTargets(rpaTarget);
+      if (openChat) openChatByUsername(openChat).catch(err => $('wechatListStatus').textContent = err.message);
+      if (chatIndex !== null && chatIndex !== undefined) {
+        const chat = currentChats[Number(chatIndex)];
+        if (chat) selectChat(chat.contact).catch(err => $('wechatListStatus').textContent = err.message);
+      }
     });
+
+    function fillRpaTargets(target) {
+      $('rpaTarget').value = target;
+      $('fileTarget').value = target;
+      $('patRoom').value = target;
+      $('roomTarget').value = target;
+    }
+
+    async function loadChats() {
+      updateWechatModeButtons();
+      $('wechatListStatus').textContent = '加载会话中...';
+      const data = await fetchJson(`${apiPath('/api/chats')}?limit=120`);
+      currentChats = data.chats || [];
+      $('wechatListStatus').textContent = `${currentChats.length} 个最近会话`;
+      renderChatList(currentChats);
+      if (!currentChat && currentChats[0]) await selectChat(currentChats[0].contact);
+    }
+
+    async function loadWechatList() {
+      if (wechatMode === 'recent') {
+        await loadChats();
+        return;
+      }
+      await loadWechatContacts(wechatMode === 'rooms' ? 'chatroom' : 'contact');
+    }
+
+    async function loadWechatContacts(contactType = 'any') {
+      updateWechatModeButtons();
+      $('wechatListStatus').textContent = contactType === 'chatroom' ? '加载群聊中...' : '加载通讯录中...';
+      const data = await fetchJson(`${apiPath('/api/contacts')}?q=&type=${encodeURIComponent(contactType)}&limit=500`);
+      currentChats = (data.contacts || []).map(contact => ({ contact, last_message: null }));
+      $('wechatListStatus').textContent = contactType === 'chatroom'
+        ? `${currentChats.length} 个群聊`
+        : `${currentChats.length} 个联系人`;
+      renderChatList(currentChats);
+      if (!currentChat && currentChats[0]) await selectChat(currentChats[0].contact);
+    }
+
+    async function setWechatMode(mode) {
+      wechatMode = mode;
+      $('wechatSearch').value = '';
+      await loadWechatList();
+    }
+
+    function updateWechatModeButtons() {
+      document.querySelectorAll('.wechat-mode').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.wechatMode === wechatMode);
+      });
+    }
+
+    async function searchWechatContacts() {
+      const q = $('wechatSearch').value.trim();
+      if (!q) {
+        await loadWechatList();
+        return;
+      }
+      $('wechatListStatus').textContent = '搜索中...';
+      const type = wechatMode === 'rooms' ? 'chatroom' : (wechatMode === 'contacts' ? 'contact' : 'any');
+      const data = await fetchJson(`${apiPath('/api/contacts')}?q=${encodeURIComponent(q)}&type=${encodeURIComponent(type)}&limit=100`);
+      currentChats = (data.contacts || []).map(contact => ({ contact, last_message: null }));
+      $('wechatListStatus').textContent = `${currentChats.length} 个联系人`;
+      renderChatList(currentChats);
+    }
+
+    function renderChatList(chats) {
+      $('wechatChatList').innerHTML = chats.map((chat, index) => chatListItem(chat, index)).join("") || '<div class="body muted">暂无会话</div>';
+    }
+
+    function chatListItem(chat, index) {
+      const c = chat.contact || {};
+      const m = chat.last_message || {};
+      const active = currentChat && currentChat.username === c.username ? ' active' : '';
+      const preview = m.text || m.raw_content || (m.type_name ? `[${m.type_name}]` : '');
+      const initials = (c.display_name || c.username || '?').slice(0, 2);
+      return `<button class="chat-item${active}" data-chat-index="${index}">
+        <div class="avatar">${esc(initials)}</div>
+        <div class="chat-main">
+          <div class="chat-topline">
+            <span class="chat-name">${esc(c.display_name || c.username || '')}</span>
+            <span class="chat-time">${esc(short(m.time || '', 16))}</span>
+          </div>
+          <div class="chat-preview">${esc(preview || c.username || '')}</div>
+        </div>
+      </button>`;
+    }
+
+    async function openChatByUsername(username) {
+      await selectChat({ username, display_name: username });
+    }
+
+    async function selectChat(contact) {
+      currentChat = contact;
+      $('wechatChatTitle').textContent = contact.display_name || contact.username || '会话';
+      $('wechatChatSub').textContent = contact.username || '';
+      $('wechatComposer').value = '';
+      $('wechatSendStatus').textContent = '';
+      renderChatList(currentChats);
+      await Promise.all([loadChatMessages(), loadContactDetail()]);
+    }
+
+    async function loadChatMessages(parseMedia = true) {
+      if (!currentChat) return;
+      $('wechatMessages').innerHTML = '<div class="muted">加载消息中...</div>';
+      const params = new URLSearchParams({
+        username: currentChat.username,
+        limit: '120',
+        parse_media: parseMedia ? 'true' : 'false'
+      });
+      const data = await fetchJson(`${apiPath('/api/messages/recent')}?${params.toString()}`);
+      currentChat = data.contact || currentChat;
+      $('wechatChatTitle').textContent = currentChat.display_name || currentChat.username || '会话';
+      $('wechatChatSub').textContent = `${currentChat.username || ''} · ${data.count} 条`;
+      $('wechatMessages').innerHTML = (data.messages || []).map(chatMessageBubble).join("") || '<div class="muted">暂无消息</div>';
+      $('wechatMessages').scrollTop = $('wechatMessages').scrollHeight;
+    }
+
+    async function loadContactDetail() {
+      if (!currentChat) return;
+      const params = new URLSearchParams({ username: currentChat.username });
+      const data = await fetchJson(`${apiPath('/api/contact/detail')}?${params.toString()}`);
+      renderContactDetail(data);
+    }
+
+    function renderContactDetail(data) {
+      const c = data.contact || {};
+      const members = data.members || [];
+      const actions = `<div class="actions" style="margin-top:10px;">
+        <button data-fill-rpa="${esc(c.display_name || c.username)}">填入 RPA</button>
+        <button data-fill-msg="${esc(c.username)}">填入消息查询</button>
+      </div>`;
+      const memberHtml = members.length
+        ? `<div class="detail-block"><div class="sub" style="margin-bottom:8px;">群成员 ${members.length}</div><div class="member-grid">${members.map(member => `<div class="member-chip">${esc(member.display_name || member.username)}<div class="sub mono">${esc(short(member.username, 36))}</div></div>`).join("")}</div></div>`
+        : '';
+      $('wechatDetail').innerHTML = `
+        <div class="detail-block">
+          <div class="item-head">
+            <div>
+              <div class="title">${esc(c.display_name || c.username || '')}</div>
+              <div class="sub mono">${esc(c.username || '')}</div>
+            </div>
+            ${c.is_chatroom ? info('群聊') : info('联系人')}
+          </div>
+          ${actions}
+        </div>
+        <div class="detail-block">${table([
+          ['备注', esc(c.remark || '')],
+          ['昵称', esc(c.nick_name || '')],
+          ['Alias', esc(c.alias || '')],
+          ['Room Remark', esc(c.room_remark || '')],
+          ['描述', esc(c.description || '')],
+          ['头像 MD5', esc(c.head_img_md5 || '')],
+          ['有消息表', bool(data.has_message_table)],
+          ['群成员数', esc(data.member_count ?? '')],
+          ['delete_flag', esc(c.delete_flag ?? '')],
+          ['verify_flag', esc(c.verify_flag ?? '')],
+          ['chat_room_notify', esc(c.chat_room_notify ?? '')],
+        ])}</div>
+        ${memberHtml}`;
+    }
+
+    function chatMessageBubble(m) {
+      const out = m.direction === 'out';
+      const display = m.sender_display || m.sender_username || (out ? '我' : '');
+      const text = m.text || m.raw_content || `[${m.type_name || m.type || '消息'}]`;
+      const mediaRows = ['path', 'thumb_path', 'file_name', 'file_size', 'file_type', 'md5', 'duration']
+        .filter(k => m[k] !== undefined && m[k] !== null && m[k] !== '')
+        .map(k => `<div>${esc(k)}: <span class="mono">${esc(m[k])}</span></div>`).join("");
+      return `<div class="bubble-row ${out ? 'out' : 'in'}">
+        <div class="bubble-wrap">
+          <div class="bubble-meta">${esc(display)} · ${esc(m.time || '')} · ${esc(m.type_name || '')}</div>
+          <div class="bubble">
+            ${esc(text)}
+            ${mediaRows ? `<div class="bubble-extra">${mediaRows}</div>` : ''}
+          </div>
+        </div>
+      </div>`;
+    }
 
     async function queryMessages(media = false) {
       const contact = $('msgContact').value.trim();
@@ -747,6 +1255,53 @@
       await loadStatus();
     }
 
+    async function sendWechatText() {
+      if (!currentChat) {
+        $('wechatSendStatus').textContent = '请先选择会话';
+        return;
+      }
+      const content = $('wechatComposer').value;
+      const atUserName = $('wechatAtUser').value.trim();
+      if (!content.trim()) {
+        $('wechatSendStatus').textContent = '消息不能为空';
+        return;
+      }
+      $('wechatSendStatus').textContent = '发送中...';
+      const data = await fetchJson(apiPath('/api/rpa/send_text'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target: currentChat.display_name || currentChat.username,
+          content,
+          at_user_name: atUserName,
+          wait_seconds: 12
+        })
+      });
+      $('wechatSendStatus').textContent = data.completed ? '已发送' : `已入队，队列 ${data.queue_size}`;
+      $('wechatComposer').value = '';
+      await loadChatMessages(true);
+      await loadWechatList();
+    }
+
+    async function dispatchRpaAction(actionType, actionData, statusEl) {
+      statusEl.textContent = '执行中...';
+      const data = await fetchJson(apiPath('/api/rpa/action'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action_type: actionType, action_data: actionData, wait_seconds: 12 })
+      });
+      statusEl.textContent = data.completed
+        ? `${actionType} 已执行完成`
+        : `${actionType} ${data.status || 'queued'}`;
+      await loadStatus();
+    }
+
+    function requireValue(id, label) {
+      const value = $(id).value.trim();
+      if (!value) throw new Error(`${label}不能为空`);
+      return value;
+    }
+
     $('refresh').addEventListener('click', () => loadStatus().catch(showHeaderError));
     $('resetWindow').addEventListener('click', () => resetWindow().catch(showHeaderError));
     $('rescanDb').addEventListener('click', () => rescanDb().catch(showHeaderError));
@@ -756,13 +1311,53 @@
     $('contactQuery').addEventListener('keydown', (event) => {
       if (event.key === 'Enter') searchContacts().catch(err => $('contactStatus').textContent = err.message);
     });
+    $('wechatSearchBtn').addEventListener('click', () => searchWechatContacts().catch(err => $('wechatListStatus').textContent = err.message));
+    $('wechatSearch').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') searchWechatContacts().catch(err => $('wechatListStatus').textContent = err.message);
+    });
+    document.querySelectorAll('.wechat-mode').forEach(btn => {
+      btn.addEventListener('click', () => setWechatMode(btn.dataset.wechatMode).catch(err => $('wechatListStatus').textContent = err.message));
+    });
+    $('wechatReloadChat').addEventListener('click', () => loadChatMessages(true).catch(err => $('wechatSendStatus').textContent = err.message));
+    $('wechatLoadMedia').addEventListener('click', () => loadChatMessages(true).catch(err => $('wechatSendStatus').textContent = err.message));
+    $('wechatSendText').addEventListener('click', () => sendWechatText().catch(err => $('wechatSendStatus').textContent = err.message));
     $('queryMessages').addEventListener('click', () => queryMessages(false).catch(err => $('messageStatus').textContent = err.message));
     $('queryMedia').addEventListener('click', () => queryMessages(true).catch(err => $('messageStatus').textContent = err.message));
     $('sendText').addEventListener('click', () => sendText().catch(err => $('rpaStatus').textContent = err.message));
+    $('sendFile').addEventListener('click', () => dispatchRpaAction('send_file', {
+      target: requireValue('fileTarget', '目标'),
+      file_path: requireValue('filePath', '文件路径'),
+      is_chatroom: $('fileTarget').value.includes('@chatroom')
+    }, $('rpaActionStatus')).catch(err => $('rpaActionStatus').textContent = err.message));
+    $('sendPat').addEventListener('click', () => dispatchRpaAction('pat', {
+      target: $('patRoom').value.trim() || requireValue('patUser', '用户'),
+      user_name: requireValue('patUser', '用户'),
+      is_chatroom: Boolean($('patRoom').value.trim())
+    }, $('rpaActionStatus')).catch(err => $('rpaActionStatus').textContent = err.message));
+    $('inviteRoomMember').addEventListener('click', () => dispatchRpaAction('invice_2_room', {
+      target: requireValue('roomTarget', '群聊'),
+      user_name: requireValue('roomMember', '成员')
+    }, $('roomActionStatus')).catch(err => $('roomActionStatus').textContent = err.message));
+    $('removeRoomMember').addEventListener('click', () => dispatchRpaAction('remove_room_member', {
+      target: requireValue('roomTarget', '群聊'),
+      user_name: requireValue('roomMember', '成员')
+    }, $('roomActionStatus')).catch(err => $('roomActionStatus').textContent = err.message));
+    $('renameRoom').addEventListener('click', () => dispatchRpaAction('rename_room_name', {
+      target: requireValue('roomTarget', '群聊'),
+      name: requireValue('roomNewName', '新群名')
+    }, $('roomActionStatus')).catch(err => $('roomActionStatus').textContent = err.message));
+    $('renameRoomNick').addEventListener('click', () => dispatchRpaAction('rename_name_in_room', {
+      target: requireValue('roomTarget', '群聊'),
+      name: requireValue('roomNickName', '我的群昵称')
+    }, $('roomActionStatus')).catch(err => $('roomActionStatus').textContent = err.message));
+    $('leaveRoom').addEventListener('click', () => dispatchRpaAction('leave_room', {
+      target: requireValue('roomTarget', '群聊')
+    }, $('roomActionStatus')).catch(err => $('roomActionStatus').textContent = err.message));
     $('loadLogs').addEventListener('click', () => loadLogs().catch(showHeaderError));
     $('logLines').addEventListener('change', () => loadLogs().catch(showHeaderError));
 
     loadStatus().catch(showHeaderError);
+    loadWechatList().catch(() => {});
     loadLogs().catch(() => {});
     setInterval(loadStatus, 5000);
   </script>

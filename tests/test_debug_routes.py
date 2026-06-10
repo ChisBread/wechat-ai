@@ -67,21 +67,40 @@ class DummyContact:
         return self.username.endswith("@chatroom")
 
 
+class DummyRoomContact(DummyContact):
+    id = 2
+    username = "room@chatroom"
+    remark = "Room"
+    nick_name = "Room Nick"
+    alias = ""
+
+
 class DummyDatabaseService:
     is_available = True
     last_error = ""
 
     def __init__(self):
         self.contact = DummyContact()
-        self._contact_by_username = {self.contact.username: self.contact}
-        self._message_username_map = {self.contact.username: {Path("/tmp/message_0.db")}}
+        self.room = DummyRoomContact()
+        self._contact_by_username = {
+            self.contact.username: self.contact,
+            self.room.username: self.room,
+        }
+        self._message_username_map = {
+            self.contact.username: {Path("/tmp/message_0.db")},
+            self.room.username: {Path("/tmp/message_0.db")},
+        }
         self.refreshed = False
 
     def get_contact_by_username(self, username):
         return self._contact_by_username.get(username)
 
     def get_contact_by_display_name(self, name):
-        return [self.contact] if name in {"Alice", "alice"} else []
+        if name in {"Alice", "alice"}:
+            return [self.contact]
+        if name in {"Room", "room"}:
+            return [self.room]
+        return []
 
     def get_contact_by_sender_id(self, sender_id, message_db_path=None):
         return self.contact
@@ -114,6 +133,8 @@ class DummyDatabaseService:
         return [("hello", "alice", "/tmp/message_0.db", 1780998000, 1001)]
 
     def get_room_member_list(self, username):
+        if username == self.room.username:
+            return [self.contact]
         return []
 
     def get_status(self):
@@ -195,9 +216,13 @@ class DebugRoutesTest(unittest.TestCase):
 
         self.assertIn("/dashboard", paths)
         self.assertIn("/dashboard/api/status", paths)
+        self.assertIn("/dashboard/api/chats", paths)
+        self.assertIn("/dashboard/api/contact/detail", paths)
+        self.assertIn("/dashboard/api/messages/recent", paths)
         self.assertIn("/dashboard/api/contacts", paths)
         self.assertIn("/dashboard/api/messages", paths)
         self.assertIn("/dashboard/api/rpa/send_text", paths)
+        self.assertIn("/dashboard/api/rpa/action", paths)
         self.assertIn("/dashboard/api/window/reset", paths)
         self.assertIn("/debug", paths)
         self.assertIn("/debug/api/status", paths)
@@ -210,6 +235,10 @@ class DebugRoutesTest(unittest.TestCase):
         html = _dashboard_html()
 
         self.assertIn("WeChat-AI 管理台", html)
+        self.assertIn('data-tab="wechat"', html)
+        self.assertIn("wechatChatList", html)
+        self.assertIn('data-wechat-mode="contacts"', html)
+        self.assertIn('data-wechat-mode="rooms"', html)
         self.assertIn("重置窗口尺寸", html)
 
     def test_create_app_skips_debug_routes_when_disabled(self):
@@ -278,6 +307,36 @@ class DebugRoutesTest(unittest.TestCase):
         self.assertEqual(recent["messages"][0]["text"], "hello")
         self.assertEqual(searched["status"], "ok")
         self.assertEqual(searched["messages"][0]["text"], "hello")
+
+    def test_dashboard_wechat_api_payloads(self):
+        from starlette.testclient import TestClient
+
+        app = create_app(
+            UserInfo(account="me"),
+            DummyConfig({"debug": {"enabled": True}, "mcp": {"port": 8000}}),
+            bot=DummyMcpBot(),
+        )
+        client = TestClient(app.streamable_http_app())
+
+        chats = client.get("/dashboard/api/chats")
+        contacts = client.get("/dashboard/api/contacts?q=&type=contact")
+        rooms = client.get("/dashboard/api/contacts?q=&type=chatroom")
+        status = client.get("/dashboard/api/status")
+        detail = client.get("/dashboard/api/contact/detail?username=room@chatroom")
+        recent = client.get("/dashboard/api/messages/recent?username=alice")
+
+        self.assertEqual(chats.status_code, 200)
+        self.assertTrue(chats.json()["chats"])
+        self.assertEqual(contacts.status_code, 200)
+        self.assertEqual(contacts.json()["contacts"][0]["username"], "alice")
+        self.assertEqual(rooms.status_code, 200)
+        self.assertEqual(rooms.json()["contacts"][0]["username"], "room@chatroom")
+        self.assertEqual(status.status_code, 200)
+        self.assertTrue(status.json()["debug"]["show_sensitive"])
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["member_count"], 1)
+        self.assertEqual(recent.status_code, 200)
+        self.assertEqual(recent.json()["messages"][0]["text"], "hello")
 
     def test_ported_write_tools_return_dry_run_payloads(self):
         app = create_app(
