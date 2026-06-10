@@ -37,7 +37,12 @@ class SendTextMessageHandler(BaseActionHandler):
                 return False
             if action.at_user_name:
                 self.controller.message_sender.clear_input_box()
-                self.controller.message_sender.mention_user(action.at_user_name)
+                if not self.controller.message_sender.mention_user(action.at_user_name):
+                    self.logger.error(
+                        "Failed to mention user before sending text: %s",
+                        action.at_user_name,
+                    )
+                    return False
                 time.sleep(self.controller.window_manager.action_delay)
             return self.controller.message_sender.send_message(
                 action.content,

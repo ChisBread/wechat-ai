@@ -9,17 +9,12 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import wechat_ai_bot.utils.mouse as pyautogui
 from Levenshtein import ratio
-from wechat_ai_bot.rpa.image_processor import ImageProcessor
-from wechat_ai_bot.rpa.ocr_processor import OCRProcessor
 from wechat_ai_bot.utils.helpers import (
-    copy_file_to_clipboard,
     get_center_point,
     read_temp_image,
     save_clipboard_image_to_temp,
     set_clipboard_text,
 )
-from wechat_ai_bot.utils.mouse import human_like_mouse_move
-from PIL import Image
 
 
 class MessageSender:
@@ -122,23 +117,99 @@ class MessageSender:
         Returns:
             bool: 是否成功。
         """
-        self.window_manager.activate_input_box()
-        pyautogui.press("@")
+        if not at_str:
+            return False
+        mention_name = self._normalize_mention_name(at_str)
+        if not mention_name:
+            return False
+        if not self.window_manager.activate_input_box():
+            return False
+        # xdotool expects the X11 keysym name. Passing "@" is ignored on some
+        # layouts, which leaves plain text like "Bread_" in the input box.
+        pyautogui.press("at")
         time.sleep(0.3)
-        at_str = at_str.split(" ")
-        at_str = max(at_str, key=len)
-        at_str = at_str.strip()
-        if not set_clipboard_text(f"{at_str}_"):
-            self.logger.error(f"设置剪贴板文本时出错")
+        if not set_clipboard_text(mention_name):
+            self.logger.error("设置剪贴板文本时出错")
             return False
         pyautogui.hotkey("ctrl", "v")
-        pyautogui.press("space")
-        pyautogui.press("backspace")
-        pyautogui.press("backspace")
-        time.sleep(0.3)
-        pyautogui.press("enter")
+        time.sleep(0.5)
+        if not self._click_mention_candidate(mention_name):
+            self.logger.warning("未能确认 @ 候选: %s", mention_name)
+            return False
         time.sleep(0.3)
         return True
+
+    def _normalize_mention_name(self, at_str: str) -> str:
+        name = str(at_str or "").strip().lstrip("@").strip()
+        if not name:
+            return ""
+        parts = [part.strip() for part in name.split() if part.strip()]
+        return max(parts, key=len) if parts else name
+
+    def _click_mention_candidate(self, mention_name: str) -> bool:
+        image_processor = getattr(self.window_manager, "image_processor", None)
+        ocr_processor = getattr(self.window_manager, "ocr_processor", None)
+        send_button = self.window_manager.get_icon_position("send_button")
+        if not image_processor or not ocr_processor or not send_button:
+            return False
+
+        region = self._mention_candidate_region(send_button)
+        if not region:
+            return False
+        try:
+            screenshot = image_processor.take_screenshot(
+                region=region,
+                save_path="/config/runtime_images/mention_candidates.png",
+            )
+        except TypeError:
+            screenshot = image_processor.take_screenshot(region=region)
+        if screenshot is None:
+            return False
+
+        results = ocr_processor.process_image(image=screenshot)
+        candidates = self._mention_candidates(mention_name, results)
+        if not candidates:
+            return False
+
+        best = candidates[0]
+        center_x, center_y = get_center_point(best["pixel_bbox"])
+        pyautogui.click(region[0] + int(center_x), region[1] + int(center_y))
+        return True
+
+    def _mention_candidate_region(self, send_button: List[int]) -> Optional[List[int]]:
+        try:
+            _send_x, send_y = get_center_point(send_button)
+            x = int(getattr(self.window_manager, "MSG_TOP_X", 0) or 0)
+            y = max(int(getattr(self.window_manager, "MSG_TOP_Y", 0) or 0), int(send_y) - 520)
+            width = int(getattr(self.window_manager, "MSG_WIDTH", 0) or 0)
+            height = max(80, int(send_y) - y - 40)
+            if width <= 0 or height <= 0:
+                return None
+            return [x, y, width, height]
+        except Exception:
+            return None
+
+    def _mention_candidates(self, mention_name: str, results: List[Dict]) -> List[Dict]:
+        needle = mention_name.lower().replace(" ", "")
+        candidates = []
+        for result in results or []:
+            label = str(result.get("label") or "")
+            compact = label.lower().replace(" ", "")
+            if not compact:
+                continue
+            similarity = ratio(needle, compact, score_cutoff=0.45)
+            if needle in compact or compact in needle or similarity >= 0.45:
+                item = dict(result)
+                item["similarity"] = float(similarity)
+                candidates.append(item)
+        candidates.sort(
+            key=lambda item: (
+                item.get("similarity", 0),
+                -float(item.get("pixel_bbox", [0, 999999])[1]),
+            ),
+            reverse=True,
+        )
+        return candidates
 
     def clear_input_box(self) -> bool:
         """
