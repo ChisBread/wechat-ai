@@ -60,8 +60,12 @@ Media notes:
   broken image.
 - The Dashboard button "发现图片密钥" and MCP tool `discover_dat_keys` automate
   the probe-image flow: send a probe to File Transfer Assistant, locate the new
-  DAT, infer the XOR key, and scan WeChat processes for AES candidates. On
-  Linux WeChat 4.x this may return `partial` when XOR is found but AES is not.
+  DAT, infer the XOR key, and first derive the AES key from Linux WeChat
+  `kvcomm/key_<code>_*.statistic` plus the account directory. If that fails,
+  the tool falls back to bounded WeChat memory scanning.
+- A successful discovery persists `aes_xor_key` in `config.yaml`. Dashboard
+  normally reuses that cached key; if media decrypt fails later, it performs a
+  local no-send `kvcomm` refresh before asking you to run a full probe again.
 
 See [docs/mcp.md](docs/mcp.md). The MCP docs are Chinese-first but include the
 client configuration snippets needed for Claude Code and OpenClaw.

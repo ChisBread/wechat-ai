@@ -29,6 +29,7 @@ from wechat_ai_bot.services.core.wechat_dat import (
     infer_xor_key,
     parse_dat_file,
 )
+from wechat_ai_bot.services.core.wechat_dat_key_discovery import derive_dat_key_for_file
 
 
 _DASHBOARD_USERNAME_ENV = "WECHAT_AI_DASHBOARD_USERNAME"
@@ -564,6 +565,8 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         dat_response = _dashboard_dat_media_response(
             file_path,
             user_info,
+            bot=bot,
+            config=config,
             headers=headers,
             as_download=_parse_bool(request.query_params.get("download"), default=False),
         )
@@ -1294,6 +1297,8 @@ def _dashboard_dat_media_response(
     file_path: Path,
     user_info: Any,
     *,
+    bot: Any | None = None,
+    config: Any | None = None,
     headers: dict[str, str],
     as_download: bool,
 ) -> Any | None:
@@ -1324,6 +1329,31 @@ def _dashboard_dat_media_response(
     try:
         result = decrypt_dat_file(file_path, aes_key=dat_key, xor_key=dat_xor_key)
     except WeChatDatError as exc:
+        refreshed = _refresh_dat_key_for_media(
+            file_path,
+            info,
+            inferred_xor_key,
+            user_info=user_info,
+            bot=bot,
+            config=config,
+        )
+        if refreshed:
+            try:
+                result = decrypt_dat_file(
+                    file_path,
+                    aes_key=refreshed.config_value,
+                    xor_key=refreshed.xor_key,
+                )
+            except WeChatDatError:
+                pass
+            else:
+                return _dat_media_binary_response(
+                    result,
+                    file_path=file_path,
+                    headers=headers,
+                    as_download=as_download,
+                    refreshed=True,
+                )
         return JSONResponse(
             {
                 "ok": False,
@@ -1335,10 +1365,30 @@ def _dashboard_dat_media_response(
                 "has_dat_key": bool(dat_key),
                 "dat_xor_key": dat_xor_key,
                 "inferred_dat_xor_key": inferred_xor_key,
+                "refreshed_dat_key": False,
             },
             status_code=422,
             headers={**headers, "Cache-Control": "no-store"},
         )
+
+    return _dat_media_binary_response(
+        result,
+        file_path=file_path,
+        headers=headers,
+        as_download=as_download,
+        refreshed=False,
+    )
+
+
+def _dat_media_binary_response(
+    result: Any,
+    *,
+    file_path: Path,
+    headers: dict[str, str],
+    as_download: bool,
+    refreshed: bool,
+) -> Any:
+    from starlette.responses import Response
 
     disposition = "attachment" if as_download else "inline"
     response = Response(
@@ -1351,7 +1401,67 @@ def _dashboard_dat_media_response(
         f"{file_path.stem}{result.extension}",
     )
     response.headers["X-WeChat-Dat-Version"] = result.info.version
+    if refreshed:
+        response.headers["X-WeChat-Dat-Key-Refreshed"] = "1"
     return response
+
+
+def _refresh_dat_key_for_media(
+    file_path: Path,
+    info: Any,
+    inferred_xor_key: int | None,
+    *,
+    user_info: Any,
+    bot: Any | None,
+    config: Any | None,
+) -> Any | None:
+    database_service = getattr(bot, "database_service", None)
+    root = (
+        getattr(database_service, "xwechat_files_root", None)
+        or getattr(database_service, "root", None)
+        or _config_get(
+            config,
+            "debug.xwechat_files_root",
+            "/config/xwechat_files",
+        )
+    )
+    try:
+        derived = derive_dat_key_for_file(
+            file_path,
+            xwechat_root=root,
+            info=info,
+            xor_key=inferred_xor_key,
+        )
+    except Exception:
+        return None
+    if not derived:
+        return None
+    if user_info:
+        user_info.dat_key = derived.config_value
+        user_info.dat_xor_key = int(derived.xor_key)
+    config_target = config or getattr(bot, "config", None)
+    _persist_dat_key_config(config_target, derived.config_value, derived.xor_key)
+    return derived
+
+
+def _persist_dat_key_config(config: Any, aes_key: str, xor_key: int) -> bool:
+    if not config:
+        return False
+    value = f"{aes_key},{int(xor_key)}"
+    if hasattr(config, "set"):
+        try:
+            config.set("aes_xor_key", value)
+            return True
+        except Exception:
+            return False
+    raw_config = getattr(config, "config", None)
+    if isinstance(raw_config, dict):
+        raw_config["aes_xor_key"] = value
+        return True
+    if isinstance(config, dict):
+        config["aes_xor_key"] = value
+        return True
+    return False
 
 
 def _infer_dat_xor_key(file_path: Path, info: Any) -> int | None:

@@ -118,7 +118,7 @@ WECHAT_AI_MCP_WRITE_ENABLED=true   # 允许 send_text_msg、send_file_msg、群�
 - `get_runtime_status`：查看 bot、数据库、RPA、队列、窗口、YOLO 等整体状态。
 - `get_database_status` / `refresh_database`：查看或重新扫描微信数据库。
 - `get_wechat_window_status` / `reset_wechat_window`：查看或重置微信窗口尺寸与布局。
-- `discover_dat_keys`：向文件传输助手发送探测图片，自动推断图片 DAT XOR key，并尝试扫描 AES key。
+- `discover_dat_keys`：向文件传输助手发送探测图片，自动推断图片 DAT XOR key，并派生/扫描 AES key。
 - `set_message_polling`：暂停或恢复数据库消息监听。
 - `get_wechat_user_info`：查看当前微信身份信息，敏感字段会脱敏。
 
@@ -210,7 +210,9 @@ bot 服务以 root 运行，是为了读取 `/proc/<wechat-pid>/mem`。微信、
 - `aes_xor_key` 为空时仍可看到图片消息和本地路径，但浏览器不能直接显示加密图片；此时 `/dashboard/media` 会返回 JSON 诊断，提示缺少 DAT AES key。
 - `aes_xor_key` 格式为 `AES文本key,60`；如果你拿到的是十六进制原始 key，用 `hex:<hexkey>,60`。
 
-管理台顶部的“发现图片密钥”和 MCP 工具 `discover_dat_keys` 会自动生成 probe 图片、发送到文件传输助手、定位新生成的 `_h.dat`、推断 XOR key，并用已知明文扫描 WeChat 相关进程里的 AES key 候选。XOR key 已可稳定自动化；AES key 在 Linux 微信 4.x 上受进程内存布局影响，扫描不到时会返回 `partial` 和候选统计，而不是静默失败。
+管理台顶部的“发现图片密钥”和 MCP 工具 `discover_dat_keys` 会自动生成 probe 图片、发送到文件传输助手、定位新生成的 `_h.dat`、推断 XOR key，并优先用 Linux 微信的 `kvcomm/key_<code>_*.statistic` 与账号目录派生 AES key。派生失败时会退回到 WeChat 相关进程内存扫描。
+
+发现成功后会自动写回 `aes_xor_key`，后续直接复用这个持久化 key。若某次媒体解密发现持久化 key 已失效，Dashboard 会先基于当前 DAT 和本地 `kvcomm` 做一次不发送消息的轻量刷新；仍失败时才需要手动点击“发现图片密钥”或调用 `discover_dat_keys(send_probe=true)` 重新发送 probe。
 
 ## 配置
 
