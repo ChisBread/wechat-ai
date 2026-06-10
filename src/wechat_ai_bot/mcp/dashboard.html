@@ -677,6 +677,7 @@
     <div class="toolbar">
       <button id="refresh">刷新状态</button>
       <button id="resetWindow" class="primary">重置窗口尺寸</button>
+      <button id="discoverDatKeys">发现图片密钥</button>
       <button id="rescanDb">重扫数据库</button>
       <button id="pauseMessages">暂停数据库监听</button>
       <button id="resumeMessages">恢复数据库监听</button>
@@ -1104,6 +1105,24 @@
     async function resetWindow() {
       $('stamp').textContent = '正在重置微信窗口尺寸...';
       await fetchJson(apiPath('/api/window/reset'), { method: 'POST' });
+      await loadStatus();
+    }
+
+    async function discoverDatKeys() {
+      $('stamp').textContent = '正在发送探测图片并扫描图片密钥...';
+      const data = await fetchJson(apiPath('/api/media/discover-dat-keys'), {
+        method: 'POST',
+        body: JSON.stringify({
+          send_probe: true,
+          target: '文件传输助手',
+          wait_seconds: 20,
+          scan_timeout_seconds: 120
+        })
+      });
+      const discovery = data.discovery || {};
+      const aes = discovery.aes_key_found ? 'AES 已找到' : 'AES 未找到';
+      const xor = discovery.xor_key === null || discovery.xor_key === undefined ? 'XOR 未找到' : `XOR=${discovery.xor_key}`;
+      $('stamp').textContent = `图片密钥发现完成：${aes}，${xor}`;
       await loadStatus();
     }
 
@@ -1612,6 +1631,7 @@
 
     $('refresh').addEventListener('click', () => loadStatus().catch(showHeaderError));
     $('resetWindow').addEventListener('click', () => resetWindow().catch(showHeaderError));
+    $('discoverDatKeys').addEventListener('click', () => discoverDatKeys().catch(showHeaderError));
     $('rescanDb').addEventListener('click', () => rescanDb().catch(showHeaderError));
     $('pauseMessages').addEventListener('click', () => pauseMessages().catch(showHeaderError));
     $('resumeMessages').addEventListener('click', () => resumeMessages().catch(showHeaderError));

@@ -58,6 +58,10 @@ Media notes:
 - Without the image DAT AES key, Dashboard still shows message metadata and
   local paths, but `/dashboard/media` returns a JSON diagnostic instead of a
   broken image.
+- The Dashboard button "发现图片密钥" and MCP tool `discover_dat_keys` automate
+  the probe-image flow: send a probe to File Transfer Assistant, locate the new
+  DAT, infer the XOR key, and scan WeChat processes for AES candidates. On
+  Linux WeChat 4.x this may return `partial` when XOR is found but AES is not.
 
 See [docs/mcp.md](docs/mcp.md). The MCP docs are Chinese-first but include the
 client configuration snippets needed for Claude Code and OpenClaw.

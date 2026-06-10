@@ -696,6 +696,47 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
 
     @mcp.tool()
     @handle_tool_exceptions
+    def discover_dat_keys(
+        ctx: Context,
+        send_probe: bool = True,
+        scan_timeout_seconds: Optional[float] = 120,
+    ) -> str:
+        """
+        Send a probe image to File Transfer Assistant and try to discover image DAT AES/XOR keys.
+        Requires MCP admin; sending the probe also requires MCP write.
+        """
+        if not _mcp_admin_enabled():
+            return _mcp_admin_blocked("discover_dat_keys")
+        if send_probe and not _mcp_write_enabled():
+            return _mcp_write_blocked("discover_dat_keys")
+        if bot is None:
+            return _json({"status": "unavailable", "message": "bot instance unavailable"})
+        try:
+            from wechat_ai_bot.services.core.wechat_dat_key_discovery import (
+                WeChatDatKeyDiscovery,
+            )
+
+            discovery = WeChatDatKeyDiscovery(
+                bot,
+                xwechat_root=_get_nested_config(config, "debug.xwechat_files_root", "/config/xwechat_files"),
+            )
+            result = discovery.discover(
+                send_probe=bool(send_probe),
+                scan_timeout_seconds=_bounded_float(scan_timeout_seconds, 120, 5, 300),
+            ).to_dict()
+        except Exception as exc:
+            return _json(
+                {
+                    "status": "error",
+                    "tool": "discover_dat_keys",
+                    "message": f"{type(exc).__name__}: {exc}",
+                }
+            )
+        result["tool"] = "discover_dat_keys"
+        return _json(result)
+
+    @mcp.tool()
+    @handle_tool_exceptions
     def search_contacts(
         ctx: Context,
         query: str,

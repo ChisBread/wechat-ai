@@ -364,6 +364,7 @@ class DebugRoutesTest(unittest.TestCase):
         self.assertIn("/dashboard/api/rpa/send_text", paths)
         self.assertIn("/dashboard/api/rpa/action", paths)
         self.assertIn("/dashboard/api/window/reset", paths)
+        self.assertIn("/dashboard/api/media/discover-dat-keys", paths)
         self.assertIn("/dashboard/media", paths)
         self.assertIn("/dashboard/layout.png", paths)
         self.assertNotIn("/debug", paths)
@@ -378,6 +379,7 @@ class DebugRoutesTest(unittest.TestCase):
         self.assertIn('data-wechat-mode="contacts"', html)
         self.assertIn('data-wechat-mode="rooms"', html)
         self.assertIn("重置窗口尺寸", html)
+        self.assertIn("发现图片密钥", html)
         self.assertIn("messageBodyHtml", html)
         self.assertIn("media-image", html)
         self.assertIn("profile-avatar", html)
@@ -499,6 +501,7 @@ class DebugRoutesTest(unittest.TestCase):
         self.assertIn("get_recent_media_messages", tools)
         self.assertIn("get_wechat_window_status", tools)
         self.assertIn("reset_wechat_window", tools)
+        self.assertIn("discover_dat_keys", tools)
         self.assertIn("set_message_polling", tools)
 
     def test_mcp_database_and_window_tools_return_json_status(self):
@@ -532,10 +535,13 @@ class DebugRoutesTest(unittest.TestCase):
         tools = app._tool_manager._tools
 
         reset = json.loads(tools["reset_wechat_window"].fn(None))
+        discover = json.loads(tools["discover_dat_keys"].fn(None, False, 5))
         send = json.loads(tools["send_text_msg"].fn(None, "Alice", "hello", None, False))
 
         self.assertEqual(reset["status"], "blocked")
         self.assertEqual(reset["tool"], "reset_wechat_window")
+        self.assertEqual(discover["status"], "blocked")
+        self.assertEqual(discover["tool"], "discover_dat_keys")
         self.assertEqual(send["status"], "blocked")
         self.assertEqual(send["tool"], "send_text_msg")
 

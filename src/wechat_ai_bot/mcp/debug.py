@@ -150,6 +150,48 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
             status_code=200 if ok else 500,
         )
 
+    @mcp.custom_route(f"{prefix}/api/media/discover-dat-keys", methods=["POST"], include_in_schema=False)
+    async def debug_discover_dat_keys(request: Request) -> Response:
+        auth_response = _require_dashboard_auth(request)
+        if auth_response is not None:
+            return auth_response
+        mutation_response = _require_dashboard_mutation_header(request)
+        if mutation_response is not None:
+            return mutation_response
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+        send_probe = _parse_bool(payload.get("send_probe"), default=True)
+        target = str(payload.get("target") or "文件传输助手").strip() or "文件传输助手"
+        wait_seconds = _bounded_float(payload.get("wait_seconds"), 20, 1, 60)
+        scan_timeout_seconds = _bounded_float(payload.get("scan_timeout_seconds"), 120, 5, 300)
+        try:
+            from wechat_ai_bot.services.core.wechat_dat_key_discovery import (
+                WeChatDatKeyDiscovery,
+            )
+
+            discovery = WeChatDatKeyDiscovery(
+                bot,
+                xwechat_root=_config_get(config, "debug.xwechat_files_root", "/config/xwechat_files"),
+            )
+            result = discovery.discover(
+                send_probe=send_probe,
+                target=target,
+                wait_seconds=wait_seconds,
+                scan_timeout_seconds=scan_timeout_seconds,
+            ).to_dict()
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"},
+                status_code=500,
+            )
+        ok = result.get("status") in {"ok", "partial"}
+        return JSONResponse(
+            {"ok": ok, "discovery": result},
+            status_code=200 if ok else 500,
+        )
+
     @mcp.custom_route(f"{prefix}/api/contacts", methods=["GET"], include_in_schema=False)
     async def debug_contacts(request: Request) -> Response:
         auth_response = _require_dashboard_auth(request)
@@ -1613,6 +1655,14 @@ def _parse_bool(value: Any, *, default: bool = False) -> bool:
     if text in {"0", "false", "no", "n", "off"}:
         return False
     return default
+
+
+def _bounded_float(value: Any, default: float, minimum: float, maximum: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(number, maximum))
 
 
 def mask_value(value: str, *, keep_start: int = 2, keep_end: int = 2) -> str:

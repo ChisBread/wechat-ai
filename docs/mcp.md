@@ -113,6 +113,7 @@ OpenClaw 或类似支持 MCP JSON 配置的客户端可使用 Streamable HTTP：
 | `refresh_database` | 重新扫描数据库、key、联系人和消息表 |
 | `get_wechat_window_status` | 微信窗口尺寸、布局和 YOLO/RPA 对齐状态 |
 | `reset_wechat_window` | 将微信窗口恢复到 RPA/YOLO 期望尺寸 |
+| `discover_dat_keys` | 自动发送图片 probe、定位 DAT、推断 XOR key 并尝试扫描 AES key |
 | `set_message_polling` | 暂停或恢复数据库消息监听 |
 
 ### 联系人和会话
@@ -170,6 +171,8 @@ Linux 微信 4.x 图片通常是加密 `.dat`：
 - 已配置 `aes_xor_key` 时，Dashboard 会尝试解密后以内联 PNG/JPEG/GIF 返回。
 - 未配置 DAT AES key 时，媒体接口返回 JSON 诊断，包含 DAT 版本、分段大小、是否缺 key 等信息；这表示路径解析成功，但图片内容还不能显示。
 - `aes_xor_key` 写在 `config.yaml` 顶层，格式为 `AES文本key,60` 或 `hex:<hexkey>,60`。
+- Dashboard 顶部“发现图片密钥”和 MCP `discover_dat_keys` 会自动生成 probe 图片并发送到文件传输助手，然后定位 `_h.dat`、推断 XOR key、扫描 AES key 候选。该工具需要 `WECHAT_AI_MCP_ADMIN_ENABLED=true`；如果 `send_probe=true`，还需要 `WECHAT_AI_MCP_WRITE_ENABLED=true`。
+- Linux 微信 4.x 的 AES key 扫描可能返回 `partial`，表示 XOR 已找到但 AES 未命中。此时媒体路径解析和诊断可用，图片头部仍无法解密显示。
 
 ## 示例
 

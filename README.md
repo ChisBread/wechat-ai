@@ -118,6 +118,7 @@ WECHAT_AI_MCP_WRITE_ENABLED=true   # 允许 send_text_msg、send_file_msg、群�
 - `get_runtime_status`：查看 bot、数据库、RPA、队列、窗口、YOLO 等整体状态。
 - `get_database_status` / `refresh_database`：查看或重新扫描微信数据库。
 - `get_wechat_window_status` / `reset_wechat_window`：查看或重置微信窗口尺寸与布局。
+- `discover_dat_keys`：向文件传输助手发送探测图片，自动推断图片 DAT XOR key，并尝试扫描 AES key。
 - `set_message_polling`：暂停或恢复数据库消息监听。
 - `get_wechat_user_info`：查看当前微信身份信息，敏感字段会脱敏。
 
@@ -173,7 +174,8 @@ http://localhost:8100/dashboard
 - MCP endpoint 需要 `Authorization: Bearer <WECHAT_AI_MCP_TOKEN>`。
 - 默认 `WECHAT_AI_DASHBOARD_USERNAME=wechat` 且 `WECHAT_AI_DASHBOARD_PASSWORD=wechat` 时禁止登录，避免镜像一启动就暴露可猜口令。
 - 默认 `WECHAT_AI_MCP_TOKEN=wechat` 时拒绝访问 MCP，避免聊天记录读取接口裸露。
-- MCP 认证通过后读取工具可用；`refresh_database`、`reset_wechat_window`、`set_message_polling` 需要 `WECHAT_AI_MCP_ADMIN_ENABLED=true`。
+- MCP 认证通过后读取工具可用；`refresh_database`、`reset_wechat_window`、`discover_dat_keys`、`set_message_polling` 需要 `WECHAT_AI_MCP_ADMIN_ENABLED=true`。
+- `discover_dat_keys` 如果要自动发送探测图片，还需要 `WECHAT_AI_MCP_WRITE_ENABLED=true`；只扫描已有 probe 可关闭发送。
 - MCP 写入微信的工具默认被拦截；发送消息、文件、拍一拍、群公告、退群、邀请/移除群成员、改群名等需要 `WECHAT_AI_MCP_WRITE_ENABLED=true`。
 - 退群、群公告、邀请/移除群成员、改群名和群内昵称即使开启写入，也必须在工具参数里显式传 `confirm=true`。
 - 管理台会提供联系人、消息、多媒体、日志和本地媒体代理能力，端口不要裸露到公网。
@@ -208,7 +210,7 @@ bot 服务以 root 运行，是为了读取 `/proc/<wechat-pid>/mem`。微信、
 - `aes_xor_key` 为空时仍可看到图片消息和本地路径，但浏览器不能直接显示加密图片；此时 `/dashboard/media` 会返回 JSON 诊断，提示缺少 DAT AES key。
 - `aes_xor_key` 格式为 `AES文本key,60`；如果你拿到的是十六进制原始 key，用 `hex:<hexkey>,60`。
 
-DAT AES key 的稳定自动发现还在适配 Linux 微信 4.x。Windows example 通过“启动后立刻给文件传输助手发一张图片，再扫描 WeChat 进程”拿 key；Linux 版内存布局不同，不能直接照搬。
+管理台顶部的“发现图片密钥”和 MCP 工具 `discover_dat_keys` 会自动生成 probe 图片、发送到文件传输助手、定位新生成的 `_h.dat`、推断 XOR key，并用已知明文扫描 WeChat 相关进程里的 AES key 候选。XOR key 已可稳定自动化；AES key 在 Linux 微信 4.x 上受进程内存布局影响，扫描不到时会返回 `partial` 和候选统计，而不是静默失败。
 
 ## 配置
 
