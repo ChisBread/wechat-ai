@@ -71,10 +71,13 @@ class Bot:
 
         # ---- User Info (config-driven on Linux, no process memory dump) ----
         wechat_cfg = self.config.get("wechat_user", {})
+        dat_key, dat_xor_key = self._parse_dat_keys(self.config.get("aes_xor_key", ""))
         self.user_info = UserInfo(
             account=wechat_cfg.get("account", ""),
             nickname=wechat_cfg.get("nickname", "WeChat-AI"),
             avatar_url=wechat_cfg.get("avatar_url", ""),
+            dat_key=dat_key,
+            dat_xor_key=dat_xor_key,
             version="4.1.0",  # Linux WeChat version
         )
 
@@ -371,6 +374,20 @@ class Bot:
     def _signal_handler(self, sig: int, frame: Any):
         self.logger.info(f"Received signal {signal.Signals(sig).name}, shutting down...")
         self.is_running = False
+
+    @staticmethod
+    def _parse_dat_keys(value: object) -> tuple[str, int]:
+        text = str(value or "").strip()
+        if not text:
+            return "", -1
+        dat_key, separator, dat_xor_key = text.partition(",")
+        if not separator:
+            return dat_key.strip(), -1
+        try:
+            parsed_xor_key = int(dat_xor_key.strip())
+        except ValueError:
+            parsed_xor_key = -1
+        return dat_key.strip(), parsed_xor_key
 
 
 def main():

@@ -1020,6 +1020,7 @@
 
     function renderDatabase(data) {
       const db = data.database || {};
+      const media = data.media || {};
       const discovery = db.discovery || db;
       const available = db.available || db.can_attempt_business_database_open;
       const rows = [
@@ -1033,6 +1034,8 @@
         ['消息表', esc(db.message_tables ?? '')],
         ['联系人', esc(db.contacts ?? '')],
         ['群聊', esc(db.rooms ?? '')],
+        ['图片 DAT Key', media.dat_key_configured ? info('已配置') : warn('未配置')],
+        ['图片 XOR Key', esc(media.dat_xor_key ?? '')],
         ['连接数', esc(db.open_connections ?? '')],
         ['上次扫描', esc(db.last_scan_at ? new Date(db.last_scan_at * 1000).toLocaleString() : '')],
         ['最近错误', esc(db.last_error || db.error || '')]

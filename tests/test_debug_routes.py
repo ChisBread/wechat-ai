@@ -10,6 +10,7 @@ from wechat_ai_bot.mcp.debug import _dashboard_html, build_layout_png, mask_valu
 from wechat_ai_bot.mcp.app import create_app
 from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.utils import size_config
+from tests.test_wechat_dat import LONG_PNG_BYTES, make_dat
 
 
 @contextmanager
@@ -296,13 +297,14 @@ class DummyMcpBot(DummyBot):
 
 
 class DummyMediaBot(DummyMcpBot):
-    def __init__(self, root):
+    def __init__(self, root, user_info=None):
         self.window_manager = DummyWindowManager()
         self.database_service = DummyDatabaseService(root=root)
         self.message_service = DummyMessageService()
         self.message_factory_service = DummyMessageFactoryService()
         self.rpa_task_queue = None
         self.chat_window_ready = False
+        self.user_info = user_info or UserInfo(account="me")
 
 
 class DummyConfig(dict):
@@ -380,6 +382,7 @@ class DebugRoutesTest(unittest.TestCase):
         self.assertIn("media-image", html)
         self.assertIn("profile-avatar", html)
         self.assertIn("locationMessageHtml", html)
+        self.assertIn("图片 DAT Key", html)
 
     def test_create_app_skips_debug_routes_when_disabled(self):
         app = create_app(
@@ -637,6 +640,60 @@ class DebugRoutesTest(unittest.TestCase):
             self.assertEqual(media.status_code, 200)
             self.assertEqual(media.headers["content-type"], "image/png")
             self.assertEqual(media.content, png)
+
+    def test_dashboard_media_dat_requires_aes_key(self):
+        from starlette.testclient import TestClient
+
+        with TemporaryDirectory() as tmp, dashboard_auth_env():
+            root = Path(tmp)
+            image_dir = root / "msg" / "attach" / "alice" / "2026-06" / "Img"
+            image_dir.mkdir(parents=True)
+            dat_path = image_dir / "image.dat"
+            dat_path.write_bytes(make_dat(plain=LONG_PNG_BYTES))
+            app = create_app(
+                UserInfo(account="me"),
+                DummyConfig({"debug": {"enabled": True}, "mcp": {"port": 8000}}),
+                bot=DummyMediaBot(root),
+            )
+            client = TestClient(app.streamable_http_app())
+
+            response = client.get(
+                "/dashboard/media?path=msg/attach/alice/2026-06/Img/image.dat",
+                headers=dashboard_auth_headers(),
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertTrue(response.json()["dat"])
+        self.assertIn("AES key", response.json()["error"])
+        self.assertEqual(response.json()["inferred_dat_xor_key"], 60)
+
+    def test_dashboard_media_dat_decrypts_with_user_info_keys(self):
+        from starlette.testclient import TestClient
+
+        key = "0123456789abcdef"
+        plain = LONG_PNG_BYTES
+        with TemporaryDirectory() as tmp, dashboard_auth_env():
+            root = Path(tmp)
+            image_dir = root / "msg" / "attach" / "alice" / "2026-06" / "Img"
+            image_dir.mkdir(parents=True)
+            dat_path = image_dir / "image.dat"
+            dat_path.write_bytes(make_dat(plain=plain, key=key.encode("utf-8"), xor_key=60))
+            user_info = UserInfo(account="me", dat_key=key, dat_xor_key=60)
+            app = create_app(
+                user_info,
+                DummyConfig({"debug": {"enabled": True}, "mcp": {"port": 8000}}),
+                bot=DummyMediaBot(root, user_info=user_info),
+            )
+            client = TestClient(app.streamable_http_app())
+
+            response = client.get(
+                "/dashboard/media?path=msg/attach/alice/2026-06/Img/image.dat",
+                headers=dashboard_auth_headers(),
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/png")
+        self.assertTrue(response.content.startswith(b"\x89PNG\r\n\x1a\n"))
 
     def test_ported_write_tools_return_dry_run_payloads(self):
         app = create_app(

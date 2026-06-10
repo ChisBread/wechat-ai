@@ -12,6 +12,7 @@ WeChat-AI 主要解决一个问题：把登录好的 Linux 微信放进一个可
 
 - **浏览器里使用 Linux 微信**：容器内置 Selkies 远程桌面，打开浏览器就能扫码、登录和操作微信。
 - **读取微信本地数据库**：通过 Python 版 `sqlcipher3-binary` 只读打开 Linux 微信 4.x 数据库，读取联系人、文本消息，以及图片、视频、文件等消息元数据。
+- **解析本地媒体路径**：能定位图片、视频、文件等本地路径。Linux 微信 4.x 的图片 `.dat` 会识别格式并尝试解密；未配置图片 DAT AES key 时，管理台会返回明确诊断。
 - **给 AI 客户端提供 MCP**：默认暴露 Streamable HTTP MCP endpoint，Claude Code、OpenClaw 等客户端可以直接接入。
 - **执行受控 RPA 操作**：支持发送文本/文件、拍一拍、群公告、退群、邀请/移除群成员、修改群名和群内昵称。写操作建议先 dry run，再由人确认。
 - **管理和调试运行时**：内置管理台可以查看数据库、队列、RPA、窗口尺寸、YOLO、插件和日志状态，也可以一键重扫数据库、重置微信窗口尺寸。
@@ -198,6 +199,17 @@ key 只保存在 bot 进程内存中，不写入磁盘。
 
 bot 服务以 root 运行，是为了读取 `/proc/<wechat-pid>/mem`。微信、X11 和桌面会话仍按容器桌面用户运行。
 
+## 图片和媒体
+
+文本消息、联系人、群成员、文件/视频元数据主要来自数据库。图片消息会先解析本地 `.dat` 路径：
+
+- Linux 微信 4.x 图片 DAT 使用 `V2` 结构：`15 字节头 + AES 段 + 16 字节 XOR 前导 + XOR 图片尾部`。
+- 项目已经能识别 DAT 头、推断常见单字节 XOR key，并在配置了 AES key 时把图片解成 PNG/JPEG/GIF 返回给管理台。
+- `aes_xor_key` 为空时仍可看到图片消息和本地路径，但浏览器不能直接显示加密图片；此时 `/dashboard/media` 会返回 JSON 诊断，提示缺少 DAT AES key。
+- `aes_xor_key` 格式为 `AES文本key,60`；如果你拿到的是十六进制原始 key，用 `hex:<hexkey>,60`。
+
+DAT AES key 的稳定自动发现还在适配 Linux 微信 4.x。Windows example 通过“启动后立刻给文件传输助手发一张图片，再扫描 WeChat 进程”拿 key；Linux 版内存布局不同，不能直接照搬。
+
 ## 配置
 
 常用文件：
@@ -213,6 +225,7 @@ bot 服务以 root 运行，是为了读取 `/proc/<wechat-pid>/mem`。微信、
 
 - `database.enabled`：启用数据库读取。
 - `database.scan_keys`：扫描微信进程内存中的 SQLCipher key。
+- `aes_xor_key`：图片 DAT 解密参数，格式如 `AES文本key,60` 或 `hex:<hexkey>,60`；留空则只解析媒体路径。
 - `rpa.window.*`：控制微信窗口目标尺寸，服务 RPA 和 YOLO 对齐。
 - `visual_message.*`：OCR/YOLO 视觉读取兜底配置。
 - `mcp.host` / `mcp.port`：容器内 MCP 监听地址和端口。

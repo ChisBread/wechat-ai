@@ -23,6 +23,12 @@ from PIL import Image, ImageDraw
 
 from wechat_ai_bot.common.queues import get_queue_stats
 from wechat_ai_bot.services.core.linux_database_discovery import LinuxDatabaseDiscovery
+from wechat_ai_bot.services.core.wechat_dat import (
+    WeChatDatError,
+    decrypt_dat_file,
+    infer_xor_key,
+    parse_dat_file,
+)
 
 
 _DASHBOARD_USERNAME_ENV = "WECHAT_AI_DASHBOARD_USERNAME"
@@ -512,6 +518,15 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         if not file_path:
             return PlainTextResponse("media not found", status_code=404)
         headers = {"Cache-Control": "private, max-age=300"}
+        user_info = getattr(bot, "user_info", None)
+        dat_response = _dashboard_dat_media_response(
+            file_path,
+            user_info,
+            headers=headers,
+            as_download=_parse_bool(request.query_params.get("download"), default=False),
+        )
+        if dat_response is not None:
+            return dat_response
         response = FileResponse(
             file_path,
             media_type=_guess_file_media_type(file_path),
@@ -664,6 +679,7 @@ def build_debug_status(
             "stride": getattr(visual_service, "yolo_stride", None),
         },
         "database": _expand_database_status(database_service, db_report, show_sensitive=show_sensitive),
+        "media": _media_status(getattr(bot, "user_info", None)),
         "plugins": _plugin_status(plugin_manager),
         "debug": {
             "raw_screenshot_enabled": bool(_config_get(config, "debug.allow_raw_screenshot", False)),
@@ -1232,6 +1248,77 @@ def _guess_file_media_type(path: Path) -> str:
     return media_type or "application/octet-stream"
 
 
+def _dashboard_dat_media_response(
+    file_path: Path,
+    user_info: Any,
+    *,
+    headers: dict[str, str],
+    as_download: bool,
+) -> Any | None:
+    try:
+        info = parse_dat_file(file_path)
+    except WeChatDatError as exc:
+        from starlette.responses import JSONResponse
+
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": str(exc),
+                "path": str(file_path),
+                "file_name": file_path.name,
+                "dat": True,
+            },
+            status_code=415,
+            headers={**headers, "Cache-Control": "no-store"},
+        )
+    if info is None:
+        return None
+
+    from starlette.responses import JSONResponse, Response
+
+    dat_key = str(getattr(user_info, "dat_key", "") or "").strip()
+    dat_xor_key = getattr(user_info, "dat_xor_key", -1)
+    inferred_xor_key = _infer_dat_xor_key(file_path, info)
+    try:
+        result = decrypt_dat_file(file_path, aes_key=dat_key, xor_key=dat_xor_key)
+    except WeChatDatError as exc:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": str(exc),
+                "path": str(file_path),
+                "file_name": file_path.name,
+                "dat": True,
+                "dat_info": info.to_dict(),
+                "has_dat_key": bool(dat_key),
+                "dat_xor_key": dat_xor_key,
+                "inferred_dat_xor_key": inferred_xor_key,
+            },
+            status_code=422,
+            headers={**headers, "Cache-Control": "no-store"},
+        )
+
+    disposition = "attachment" if as_download else "inline"
+    response = Response(
+        result.data,
+        media_type=result.media_type,
+        headers=headers,
+    )
+    response.headers["Content-Disposition"] = _content_disposition(
+        disposition,
+        f"{file_path.stem}{result.extension}",
+    )
+    response.headers["X-WeChat-Dat-Version"] = result.info.version
+    return response
+
+
+def _infer_dat_xor_key(file_path: Path, info: Any) -> int | None:
+    try:
+        return infer_xor_key(file_path.read_bytes(), info)
+    except Exception:
+        return None
+
+
 def _content_disposition(disposition: str, filename: str) -> str:
     ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_", filename).strip("._") or "download"
     utf8_name = quote(filename, safe="")
@@ -1407,6 +1494,16 @@ def _mqtt_status(mqtt_service: Any) -> dict[str, Any]:
         "host": getattr(mqtt_service, "host", ""),
         "port": getattr(mqtt_service, "port", ""),
         "connected": bool(getattr(paho_client, "connected_flag", False)),
+    }
+
+
+def _media_status(user_info: Any) -> dict[str, Any]:
+    if not user_info:
+        return {"dat_key_configured": False, "dat_xor_key": -1}
+    dat_key = str(getattr(user_info, "dat_key", "") or "")
+    return {
+        "dat_key_configured": bool(dat_key),
+        "dat_xor_key": getattr(user_info, "dat_xor_key", -1),
     }
 
 

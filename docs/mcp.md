@@ -161,6 +161,16 @@ MCP 本身面向可信 Agent 客户端。把 `8100` 端口暴露到其他机器�
 - 只在确实需要时开启 `WECHAT_AI_MCP_ADMIN_ENABLED` 和 `WECHAT_AI_MCP_WRITE_ENABLED`。
 - 不把 `.env`、`config/`、`xwechat_files/` 和容器内 `/config` 目录同步到不可信位置。
 
+## 媒体与图片 DAT
+
+`get_recent_messages(parse_media=true)` 和 `get_recent_media_messages` 会尽量返回图片、视频、文件的本地路径。Dashboard 的 `/dashboard/media?path=...` 只代理允许目录内的本地文件。
+
+Linux 微信 4.x 图片通常是加密 `.dat`：
+
+- 已配置 `aes_xor_key` 时，Dashboard 会尝试解密后以内联 PNG/JPEG/GIF 返回。
+- 未配置 DAT AES key 时，媒体接口返回 JSON 诊断，包含 DAT 版本、分段大小、是否缺 key 等信息；这表示路径解析成功，但图片内容还不能显示。
+- `aes_xor_key` 写在 `config.yaml` 顶层，格式为 `AES文本key,60` 或 `hex:<hexkey>,60`。
+
 ## 示例
 
 搜索联系人：

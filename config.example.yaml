@@ -5,7 +5,10 @@ wechat_user:
   account: ""
   nickname: ""
 
-# AES image decryption keys (auto-detected if empty)
+# WeChat image DAT decryption keys.
+# Format: "aes-key-text,60" or "hex:<aes-key-hex>,60".
+# Empty means metadata and file paths are still available, but encrypted DAT images
+# need the key before Dashboard can render them.
 aes_xor_key: ""
 
 # MCP Server configuration

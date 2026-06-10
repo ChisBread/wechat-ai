@@ -50,5 +50,14 @@ Ported write tools include `send_text_msg`, `send_file_msg`, `send_pat_msg`,
 `invite_room_member`, `rename_room_name`, and `rename_name_in_room`.
 Group-management operations require explicit human confirmation.
 
+Media notes:
+
+- The database reader resolves local paths for images, videos, and files.
+- Linux WeChat 4.x image `.dat` files are detected and can be decrypted when
+  `aes_xor_key` is configured as `AES-text-key,60` or `hex:<aes-key-hex>,60`.
+- Without the image DAT AES key, Dashboard still shows message metadata and
+  local paths, but `/dashboard/media` returns a JSON diagnostic instead of a
+  broken image.
+
 See [docs/mcp.md](docs/mcp.md). The MCP docs are Chinese-first but include the
 client configuration snippets needed for Claude Code and OpenClaw.
