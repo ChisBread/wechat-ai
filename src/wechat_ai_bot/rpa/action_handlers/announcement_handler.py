@@ -63,7 +63,7 @@ class PublicRoomAnnouncementHandler(BaseActionHandler):
             self.logger.error("未找到完成或编辑按钮")
             return False
         finally:
-            self._cleanup()
+            self._cleanup(close_sidebar=True)
 
     def _click_announcement_button(self, action: PublicRoomAnnouncementAction) -> bool:
         """

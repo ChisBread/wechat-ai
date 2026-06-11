@@ -40,7 +40,7 @@ class LeaveRoomHandler(WindowOperationsMixin, GroupOperationsMixin, BaseActionHa
         """
         try:
             if not self.window_manager.switch_session(action.target):
-                self._cleanup()
+                self._cleanup(close_sidebar=True)
                 return False
             self.window_manager.open_close_sidebar()
             region = self._get_room_side_bar_region()
@@ -62,4 +62,4 @@ class LeaveRoomHandler(WindowOperationsMixin, GroupOperationsMixin, BaseActionHa
                 return False
             return True
         finally:
-            self._cleanup()
+            self._cleanup(close_sidebar=True)

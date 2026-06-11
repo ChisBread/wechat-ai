@@ -47,4 +47,4 @@ class RenameNameInRoomHandler(WindowOperationsMixin, GroupOperationsMixin, BaseA
             self._trigger_room_input_confirmation()
             return self._confirm_room_input_change(timeout=25)
         finally:
-            self._cleanup()
+            self._cleanup(close_sidebar=True)

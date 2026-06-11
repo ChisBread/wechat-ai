@@ -234,6 +234,17 @@ class XFCEWindowManagerTest(unittest.TestCase):
 
         self.assertFalse(manager._is_room_sidebar_open())
 
+    def test_room_sidebar_state_ignores_single_sidebar_marker(self):
+        manager = XFCEWindowManager(
+            image_processor=DummyImageProcessor(),
+            ocr_processor=DummyOCRProcessor(labels=["消息免打扰", "Bread"]),
+        )
+        manager.size_config.width = 1008
+        manager.size_config.height = 1820
+        manager.TITLE_BAR_HEIGHT = 69
+
+        self.assertFalse(manager._is_room_sidebar_open())
+
     def test_room_sidebar_state_detects_sidebar_markers(self):
         manager = XFCEWindowManager(
             image_processor=DummyImageProcessor(),

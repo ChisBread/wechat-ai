@@ -45,12 +45,13 @@ class BaseActionHandler(ABC):
         """
         pass
 
-    def _cleanup(self):
+    def _cleanup(self, close_sidebar: bool = False):
         """
-        公共清理逻辑：关闭所有弹窗和侧边栏。
+        公共清理逻辑：关闭弹窗；按需关闭群设置侧边栏。
         """
         try:
             self.window_manager.close_all_windows()
-            self.window_manager.open_close_sidebar(close=True)
+            if close_sidebar:
+                self.window_manager.open_close_sidebar(close=True)
         except Exception as e:
             self.logger.warning(f"清理时发生异常: {e}")

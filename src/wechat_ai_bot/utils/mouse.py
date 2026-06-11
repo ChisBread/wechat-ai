@@ -7,13 +7,39 @@ import re
 import subprocess
 import time
 
+_KEY_ALIASES = {
+    "backspace": "BackSpace",
+    "ctrl": "ctrl",
+    "control": "ctrl",
+    "delete": "Delete",
+    "del": "Delete",
+    "enter": "Return",
+    "esc": "Escape",
+    "escape": "Escape",
+    "return": "Return",
+    "space": "space",
+    "tab": "Tab",
+}
+
+
 class ScreenSize:
     def __init__(self, w=1024, h=768):
         self.width = w
         self.height = h
 
 def _xdotool(*args):
-    subprocess.run(["xdotool"] + list(args), capture_output=True, timeout=5)
+    return subprocess.run(
+        ["xdotool"] + list(args),
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=True,
+    )
+
+
+def _normalize_key(key):
+    value = str(key)
+    return _KEY_ALIASES.get(value.lower(), value)
 
 def _run_display_command(cmd):
     env = os.environ.copy()
@@ -65,9 +91,9 @@ def scroll(clicks, x=None, y=None):
     d = "4" if clicks > 0 else "5"
     for _ in range(abs(clicks)): _xdotool("click", d); time.sleep(0.02)
 
-def press(k): _xdotool("key", str(k))
+def press(k): _xdotool("key", _normalize_key(k))
 def hotkey(*keys):
-    combo = "+".join(str(k).lower() for k in keys)
+    combo = "+".join(_normalize_key(k) for k in keys)
     _xdotool("key", combo)
 
 def typewrite(text, interval=0.02):

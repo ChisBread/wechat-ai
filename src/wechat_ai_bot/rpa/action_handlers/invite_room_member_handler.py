@@ -48,7 +48,7 @@ class Invite2RoomHandler(WindowOperationsMixin, GroupOperationsMixin, BaseAction
                 return False
             return self._select_contact_and_confirm(action, popup)
         finally:
-            self._cleanup()
+            self._cleanup(close_sidebar=True)
 
     def _click_invite_button(self) -> bool:
         region = self._get_room_side_bar_region()

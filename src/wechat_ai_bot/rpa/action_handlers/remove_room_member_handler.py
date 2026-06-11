@@ -48,7 +48,7 @@ class RemoveRoomMemberHandler(WindowOperationsMixin, GroupOperationsMixin, BaseA
                 return False
             return self._select_member_and_confirm(action, popup)
         finally:
-            self._cleanup()
+            self._cleanup(close_sidebar=True)
 
     def _click_remove_button(self) -> bool:
         for _ in range(4):

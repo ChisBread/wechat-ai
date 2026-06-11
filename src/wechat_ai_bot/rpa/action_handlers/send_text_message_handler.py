@@ -47,6 +47,7 @@ class SendTextMessageHandler(BaseActionHandler):
             return self.controller.message_sender.send_message(
                 action.content,
                 clear_input_box=action.at_user_name is None,
+                activate_input_box=action.at_user_name is None,
             )
         finally:
             self._cleanup()

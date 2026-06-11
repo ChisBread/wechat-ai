@@ -138,9 +138,13 @@ class XFCEWindowManager:
             "显示群成员昵称",
             "退出群聊",
         )
+        matched_markers = set()
         for label in normalized_labels:
-            if any(marker in label or label in marker for marker in markers):
-                return True
+            for marker in markers:
+                if marker in label or label in marker:
+                    matched_markers.add(marker)
+        if len(matched_markers) >= 2:
+            return True
         self.logger.debug("Room sidebar markers not found: labels=%s region=%s", labels, region)
         return False
 

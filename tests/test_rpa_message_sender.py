@@ -52,7 +52,7 @@ class DummyOCRProcessor:
 
 
 class MessageSenderMentionTest(unittest.TestCase):
-    def test_mention_user_uses_at_key_and_plain_search_name(self):
+    def test_mention_user_uses_at_key_plain_search_name_and_enter(self):
         sender = MessageSender(DummyWindowManager())
         pressed = []
         hotkeys = []
@@ -81,10 +81,33 @@ class MessageSenderMentionTest(unittest.TestCase):
             ok = sender.mention_user("@Bread extra")
 
         self.assertTrue(ok)
-        self.assertEqual(pressed, ["at"])
+        self.assertEqual(pressed, ["at", "enter"])
         self.assertEqual(hotkeys, [("ctrl", "v")])
         self.assertEqual(clipboards, ["Bread"])
-        self.assertEqual(clicks, [(265, 834)])
+        self.assertEqual(clicks, [])
+
+    def test_send_message_can_skip_input_activation_after_mention(self):
+        window = DummyWindowManager()
+        sender = MessageSender(window)
+        window.activated = 0
+
+        def activate_input_box():
+            window.activated += 1
+            return True
+
+        window.activate_input_box = activate_input_box
+
+        with (
+            patch("wechat_ai_bot.rpa.message_sender.time.sleep", lambda _seconds: None),
+            patch("wechat_ai_bot.rpa.message_sender.set_clipboard_text", lambda _text: True),
+            patch("wechat_ai_bot.rpa.message_sender.pyautogui.hotkey"),
+            patch("wechat_ai_bot.rpa.message_sender.pyautogui.press"),
+            patch("wechat_ai_bot.rpa.message_sender.pyautogui.click"),
+        ):
+            ok = sender.send_message("hello", clear_input_box=False, activate_input_box=False)
+
+        self.assertTrue(ok)
+        self.assertEqual(window.activated, 0)
 
     def test_mention_candidate_region_stays_near_input_box(self):
         sender = MessageSender(DummyWindowManager())
