@@ -421,7 +421,7 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
             wait_seconds = float(payload.get("wait_seconds", 8))
         except (TypeError, ValueError):
             wait_seconds = 8
-        wait_seconds = max(0, min(wait_seconds, 30))
+        wait_seconds = max(0, min(wait_seconds, 60))
         if not target:
             return JSONResponse({"ok": False, "error": "target is required"}, status_code=400)
         if not content:
@@ -503,7 +503,7 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
             wait_seconds = float(payload.get("wait_seconds", 8))
         except (TypeError, ValueError):
             wait_seconds = 8
-        wait_seconds = max(0, min(wait_seconds, 30))
+        wait_seconds = max(0, min(wait_seconds, 60))
         queue = getattr(bot, "rpa_task_queue", None)
         if queue is None:
             return JSONResponse({"ok": False, "error": "rpa queue unavailable"}, status_code=503)

@@ -349,7 +349,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         if not _mcp_write_enabled():
             return _mcp_write_blocked(tool_name)
         app_context = _get_app_context_from_request(ctx)
-        wait_timeout = _bounded_float(wait_seconds, 12, 0, 30)
+        wait_timeout = _bounded_float(wait_seconds, 12, 0, 60)
         dispatch_rpa_wait = getattr(app_context.command_dispatcher, "dispatch_rpa_wait", None)
         if callable(dispatch_rpa_wait):
             dispatch_result = dispatch_rpa_wait(
@@ -1385,7 +1385,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         room_name: str,
         new_name: str,
         dry_run: bool = False,
-        wait_seconds: Optional[float] = 12,
+        wait_seconds: Optional[float] = 25,
         confirm: bool = False,
     ) -> str:
         """Rename a group chat via RPA."""
@@ -1421,7 +1421,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         room_name: str,
         new_name_in_room: str,
         dry_run: bool = False,
-        wait_seconds: Optional[float] = 12,
+        wait_seconds: Optional[float] = 25,
         confirm: bool = False,
     ) -> str:
         """Rename the current user's display name in a group chat via RPA."""

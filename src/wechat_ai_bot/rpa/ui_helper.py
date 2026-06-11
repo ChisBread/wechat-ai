@@ -11,7 +11,7 @@ import cv2
 import mss
 import numpy as np
 import wechat_ai_bot.utils.mouse as pyautogui
-from fuzzywuzzy import process
+from fuzzywuzzy import fuzz, process
 from wechat_ai_bot.utils.helpers import get_center_point
 from wechat_ai_bot.utils.mouse import human_like_mouse_move
 
@@ -27,7 +27,7 @@ class BtnType(Enum):
 
 
 COLOR_RANGES = {
-    BtnType.GREEN: [(np.array([64, 40, 40]), np.array([84, 255, 255]))],
+    BtnType.GREEN: [(np.array([50, 30, 30]), np.array([95, 255, 255]))],
     BtnType.RED: [
         (np.array([0, 100, 100]), np.array([10, 255, 255])),
         (np.array([170, 100, 100]), np.array([179, 255, 255])),
@@ -95,7 +95,11 @@ class UIInteractionHelper:
         return None
 
     def find_text_elements(
-        self, text: str, region: Tuple[int, int, int, int], fuzzy: int = 100
+        self,
+        text: str,
+        region: Tuple[int, int, int, int],
+        fuzzy: int = 100,
+        save_path: Optional[str] = None,
     ) -> List[Dict]:
         """
         根据文本查找元素。
@@ -107,7 +111,7 @@ class UIInteractionHelper:
         Returns:
             List[Dict]: 匹配元素列表。
         """
-        ocr_results = self._shot_and_ocr(region=region)
+        ocr_results = self._shot_and_ocr(region=region, save_path=save_path)
         results = []
         if fuzzy < 100 and ocr_results:
             choices_with_indices = [
@@ -134,6 +138,15 @@ class UIInteractionHelper:
                 d["pixel_bbox"][2] + region[0],
                 d["pixel_bbox"][3] + region[1],
             ]
+        if not results:
+            labels = [item.get("label") for item in ocr_results]
+            self.logger.debug(
+                "OCR未匹配文本: text=%s fuzzy=%s labels=%s region=%s",
+                text,
+                fuzzy,
+                labels,
+                region,
+            )
         return results
 
     def click_element(
@@ -152,7 +165,11 @@ class UIInteractionHelper:
         pyautogui.click()
         time.sleep(self.controller.window_manager.action_delay)
 
-    def _shot_and_ocr(self, region: List[int]) -> List[Dict]:
+    def _shot_and_ocr(
+        self,
+        region: List[int],
+        save_path: Optional[str] = None,
+    ) -> List[Dict]:
         """
         截图并进行 OCR。
         Args:
@@ -161,12 +178,17 @@ class UIInteractionHelper:
             List[Dict]: OCR 结果。
         """
         screenshot = self.controller.image_processor.take_screenshot(
-            region=region, save_path="runtime_images/shot_and_ocr.png"
+            region=region,
+            save_path=save_path or "/config/runtime_images/shot_and_ocr.png",
         )
         return self.controller.ocr_processor.process_image(image=screenshot)
 
     def find_and_click_text_element(
-        self, text: str, region: Tuple[int, int, int, int]
+        self,
+        text: str,
+        region: Tuple[int, int, int, int],
+        fuzzy: int = 100,
+        save_path: Optional[str] = None,
     ) -> Optional[Tuple[int, int, int, int]]:
         """
         查找并点击指定文本元素。
@@ -176,17 +198,97 @@ class UIInteractionHelper:
         Returns:
             Optional[Tuple[int, int, int, int]]: 点击区域。
         """
-        ocr_results = self.find_text_elements(text=text, region=region)
+        ocr_results = self.find_text_elements(
+            text=text,
+            region=region,
+            fuzzy=fuzzy,
+            save_path=save_path,
+        )
         if ocr_results:
-            from wechat_ai_bot.utils.helpers import get_center_point
-            from wechat_ai_bot.utils.mouse import human_like_mouse_move
-
             bbox = ocr_results[0].get("pixel_bbox")
             center = get_center_point(bbox)
             human_like_mouse_move(target_x=center[0], target_y=center[1])
             pyautogui.click()
             return bbox
         return None
+
+    def find_and_click_text_candidate(
+        self,
+        texts: Tuple[str, ...],
+        region: Tuple[int, int, int, int],
+        fuzzy: int = 78,
+        save_path: Optional[str] = None,
+    ) -> Optional[Tuple[int, int, int, int]]:
+        ocr_results = self._shot_and_ocr(
+            region=list(region),
+            save_path=save_path or "/config/runtime_images/text_candidate_ocr.png",
+        )
+        if not ocr_results:
+            self.logger.warning("OCR未识别到候选文本: %s region=%s", texts, region)
+            return None
+
+        candidates = []
+        targets = [str(text or "").strip() for text in texts if str(text or "").strip()]
+        for result in ocr_results:
+            label = str(result.get("label") or "").strip()
+            if not label:
+                continue
+            label_norm = "".join(label.split())
+            best_score = 0
+            best_target = ""
+            for target in targets:
+                target_norm = "".join(target.split())
+                if not target_norm:
+                    continue
+                if label_norm == target_norm:
+                    score = 100
+                elif target_norm in label_norm or label_norm in target_norm:
+                    length_ratio = min(len(target_norm), len(label_norm)) / max(
+                        len(target_norm),
+                        len(label_norm),
+                    )
+                    score = 95 if length_ratio >= 0.75 else int(70 * length_ratio)
+                else:
+                    score = fuzz.ratio(target_norm, label_norm)
+                if score > best_score:
+                    best_score = score
+                    best_target = target
+            if best_score >= fuzzy:
+                item = dict(result)
+                item["match_score"] = best_score
+                item["match_target"] = best_target
+                item["pixel_bbox"] = [
+                    int(round(item["pixel_bbox"][0] + region[0])),
+                    int(round(item["pixel_bbox"][1] + region[1])),
+                    int(round(item["pixel_bbox"][2] + region[0])),
+                    int(round(item["pixel_bbox"][3] + region[1])),
+                ]
+                candidates.append(item)
+
+        if not candidates:
+            labels = [result.get("label") for result in ocr_results]
+            self.logger.warning(
+                "OCR未匹配候选文本: targets=%s labels=%s region=%s",
+                texts,
+                labels,
+                region,
+            )
+            return None
+
+        candidates.sort(key=lambda item: item.get("match_score", 0), reverse=True)
+        bbox = candidates[0].get("pixel_bbox")
+        center = get_center_point(bbox)
+        self.logger.info(
+            "OCR点击候选文本: target=%s label=%s score=%s bbox=%s center=%s",
+            candidates[0].get("match_target"),
+            candidates[0].get("label"),
+            candidates[0].get("match_score"),
+            bbox,
+            center,
+        )
+        human_like_mouse_move(target_x=center[0], target_y=center[1])
+        pyautogui.click(center[0], center[1])
+        return bbox
 
     def _find_areas_by_opencv(
         self, region: Tuple[int, int, int, int], btn_type: BtnType, min_area=500
@@ -201,7 +303,7 @@ class UIInteractionHelper:
             Tuple[List[Tuple[int, int]], List[Tuple[int, int, int, int]]]: 按钮中心点和区域列表。
         """
         screenshot = self.controller.image_processor.take_screenshot(
-            region=region, save_path="runtime_images/find_areas_by_opencv.png"
+            region=region, save_path="/config/runtime_images/find_areas_by_opencv.png"
         )
         frame_bgr = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
         hsv_frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)

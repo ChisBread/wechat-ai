@@ -1617,7 +1617,7 @@
       const data = await fetchJson(apiPath('/api/rpa/action'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action_type: actionType, action_data: actionData, wait_seconds: 12 })
+        body: JSON.stringify({ action_type: actionType, action_data: actionData, wait_seconds: 35 })
       });
       statusEl.textContent = data.completed
         ? `${actionType} 已执行完成`

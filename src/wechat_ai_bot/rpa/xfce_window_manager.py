@@ -94,6 +94,56 @@ class XFCEWindowManager:
             and geom["height"] >= self.MIN_MAIN_WINDOW_HEIGHT
         )
 
+    def _is_wechat_popup_window(self, window: XdotoolWindow) -> bool:
+        if window.title.lower() not in {"wechat", "weixin", "微信"}:
+            return False
+        if window.width >= self.size_config.width or window.height >= self.size_config.height:
+            return False
+        return window.width >= 220 and window.height >= 120
+
+    def _room_sidebar_region(self) -> list[int]:
+        width = int(self.ROOM_SIDE_BAR_WIDTH or self.rpa_config.get("room_side_bar_width", 360))
+        width = max(260, min(width, int(self.size_config.width) // 2))
+        top = int(self.TITLE_BAR_HEIGHT or 52)
+        return [
+            int(self.size_config.width) - width,
+            top,
+            width,
+            int(self.size_config.height) - top,
+        ]
+
+    def _is_room_sidebar_open(self) -> bool:
+        region = self._room_sidebar_region()
+        try:
+            screenshot = self.image_processor.take_screenshot(
+                region=region,
+                save_path="/config/runtime_images/sidebar_state_ocr.png",
+            )
+            if screenshot is None:
+                return False
+            results = self.ocr_processor.process_image(image=screenshot)
+        except Exception as exc:
+            self.logger.debug("Failed to OCR room sidebar state: %s", exc)
+            return False
+
+        labels = [str(item.get("label") or "").strip() for item in results]
+        normalized_labels = ["".join(label.split()) for label in labels if label]
+        markers = (
+            "搜索群成员",
+            "群聊名称",
+            "群公告",
+            "消息免打扰",
+            "我在本群的昵称",
+            "查找聊天内容",
+            "显示群成员昵称",
+            "退出群聊",
+        )
+        for label in normalized_labels:
+            if any(marker in label or label in marker for marker in markers):
+                return True
+        self.logger.debug("Room sidebar markers not found: labels=%s region=%s", labels, region)
+        return False
+
     def _managed_window_ids(self) -> set[str]:
         """Return top-level windows known by the window manager."""
         try:
@@ -172,14 +222,52 @@ class XFCEWindowManager:
             windows.append(XdotoolWindow(wid, name, geom))
         return windows
 
+    def _all_wechat_windows(self) -> list[XdotoolWindow]:
+        windows_by_id: dict[str, XdotoolWindow] = {
+            window.id: window for window in self._all_managed_windows()
+        }
+        for query in (
+            ("search", "--class", "wechat"),
+            ("search", "--name", "WeChat"),
+            ("search", "--name", "Weixin"),
+            ("search", "--name", "wechat"),
+            ("search", "--name", "微信"),
+        ):
+            result = _run("xdotool", *query)
+            for wid in result.stdout.strip().split():
+                if not wid or wid in windows_by_id:
+                    continue
+                geom = self._window_geometry(wid)
+                if not geom:
+                    continue
+                name = _run("xdotool", "getwindowname", wid).stdout.strip()
+                if not name:
+                    continue
+                windows_by_id[wid] = XdotoolWindow(wid, name, geom)
+        return list(windows_by_id.values())
+
+    def _active_window(self) -> Optional[XdotoolWindow]:
+        result = _run("xdotool", "getactivewindow")
+        wid = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+        if not wid:
+            return None
+        geom = self._window_geometry(wid)
+        if not geom:
+            return None
+        name = _run("xdotool", "getwindowname", wid).stdout.strip()
+        if not name:
+            return None
+        return XdotoolWindow(wid, name, geom)
+
     def get_window(
         self,
         window_type: WindowTypeEnum,
         all_windows: bool = False,
     ) -> Optional[XdotoolWindow]:
         windows = self._all_managed_windows()
+        wechat_titles = {"wechat", "weixin", "微信"}
         if window_type == WindowTypeEnum.MainWindow:
-            return next((w for w in windows if w.title in {"WeChat", "Weixin", "微信"}), None)
+            return next((w for w in windows if w.title.lower() in wechat_titles), None)
         if window_type == WindowTypeEnum.PublicAnnouncementWindow:
             return next((w for w in windows if "群公告" in w.title), None)
         if window_type == WindowTypeEnum.InviteMemberWindow:
@@ -191,7 +279,7 @@ class XFCEWindowManager:
                 (
                     w
                     for w in windows
-                    if w.title in {"Weixin", "微信"}
+                    if w.title.lower() in wechat_titles
                     and w.width < max(600, self.size_config.width)
                     and w.height < max(700, self.size_config.height)
                 ),
@@ -202,16 +290,14 @@ class XFCEWindowManager:
             WindowTypeEnum.InviteResonWindow,
             WindowTypeEnum.RoomInputConfirmBox,
         ):
-            return next(
-                (
-                    w
-                    for w in windows
-                    if w.title in {"Weixin", "微信", "WeChat"}
-                    and w.width < self.size_config.width
-                    and w.height < self.size_config.height
-                ),
-                None,
-            )
+            active = self._active_window()
+            if active and self._is_wechat_popup_window(active):
+                return active
+            popup_windows = [
+                w for w in self._all_wechat_windows() if self._is_wechat_popup_window(w)
+            ]
+            popup_windows.sort(key=lambda w: w.width * w.height, reverse=True)
+            return popup_windows[0] if popup_windows else None
         return None
 
     def wait_for_window(
@@ -431,6 +517,11 @@ class XFCEWindowManager:
         tolerance = int(self.rpa_config.get("window", {}).get("size_tolerance", 8))
         for attempt in range(1, 4):
             _run("xdotool", "windowactivate", wid)
+            time.sleep(self.action_delay)
+            try:
+                _run("wmctrl", "-ir", wid, "-b", "remove,maximized_vert,maximized_horz")
+            except FileNotFoundError:
+                self.logger.debug("wmctrl not available; resizing with xdotool only")
             time.sleep(self.action_delay)
             _run("xdotool", "windowmove", "--sync", wid, "0", "0")
             _run("xdotool", "windowsize", "--sync", wid, str(target_w), str(target_h))
@@ -832,14 +923,10 @@ class XFCEWindowManager:
             self.logger.warning(f"Failed to save layout debug image: {e}")
 
     def close_all_windows(self):
-        for window in self._all_managed_windows():
+        for window in self._all_wechat_windows():
             if window.id == self.window_id:
                 continue
-            is_wechat_popup = (
-                window.title in {"WeChat", "Weixin", "微信"}
-                and window.width < self.MIN_MAIN_WINDOW_WIDTH
-                and window.height < self.MIN_MAIN_WINDOW_HEIGHT
-            )
+            is_wechat_popup = self._is_wechat_popup_window(window)
             is_named_dialog = any(
                 text in window.title
                 for text in ("群公告", "添加群成员", "邀请", "移出群成员", "删除成员")
@@ -856,20 +943,13 @@ class XFCEWindowManager:
     def open_close_sidebar(self, close: bool = False):
         try:
             w = int(self.size_config.width)
-            h = int(self.size_config.height)
-            sidebar_w = int(self.ROOM_SIDE_BAR_WIDTH or self.rpa_config.get("room_side_bar_width", 360))
-            sidebar_w = max(260, min(sidebar_w, w // 2))
-            sample_x = max(0, w - 20)
-            sample_y = min(h - 20, max(self.TITLE_BAR_HEIGHT + 120, h // 2))
-            color = self.image_processor.get_pixel_color(sample_x, sample_y)
-            # The opened settings sidebar is mostly white on current Linux WeChat.
-            opened = bool(color and all(channel >= 238 for channel in color[:3]))
+            opened = self._is_room_sidebar_open()
             if close and not opened:
                 return True
             if not close and opened:
                 return True
-            x = min(w - 36, max(self.MSG_TOP_X + self.MSG_WIDTH - 46, w - 58))
-            y = max(28, self.TITLE_BAR_HEIGHT // 2)
+            x = max(0, w - 30)
+            y = max(36, int(self.TITLE_BAR_HEIGHT or 52) - 10)
             human_like_mouse_move(x, y)
             pyautogui.click()
             time.sleep(self.side_bar_delay)

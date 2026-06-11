@@ -701,10 +701,11 @@ class LinuxWindowManager:
     def get_window(self, window_type: WindowTypeEnum, all_windows: bool = False) -> Optional[X11Window]:
         """Find a specific WeChat popup window by type."""
         all_x11_windows = self._get_all_windows()
+        wechat_titles = {"wechat", "weixin", "微信"}
 
         if window_type == WindowTypeEnum.MainWindow:
             for win in all_x11_windows:
-                if win.title == "微信":
+                if win.title.lower() in wechat_titles:
                     return win
 
         elif window_type == WindowTypeEnum.AddFriendWindow:
@@ -742,12 +743,12 @@ class LinuxWindowManager:
 
         elif window_type in (WindowTypeEnum.InviteConfirmWindow, WindowTypeEnum.InviteResonWindow, WindowTypeEnum.RoomInputConfirmBox):
             for win in all_x11_windows:
-                if win.title == "Weixin" and win.width < self.size_config.width:
+                if win.title.lower() in wechat_titles and win.width < self.size_config.width:
                     return win
 
         elif window_type == WindowTypeEnum.SearchContactWindow:
             for win in all_x11_windows:
-                if win.title == "Weixin" and win.left < self.SIDE_BAR_WIDTH:
+                if win.title.lower() in wechat_titles and win.left < self.SIDE_BAR_WIDTH:
                     return win
 
         return None

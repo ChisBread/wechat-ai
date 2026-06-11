@@ -30,7 +30,7 @@ RUN apt-get update && \
         libpangocairo-1.0-0 libx11-6 libx11-xcb1 libxcomposite1 libxdamage1 \
         libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 \
         libatomic1 shared-mime-info desktop-file-utils stalonetray inotify-tools \
-        curl wget xclip xdotool x11-utils x11-xserver-utils gnome-screenshot libgl1 \
+        curl wget xclip xdotool wmctrl x11-utils x11-xserver-utils gnome-screenshot libgl1 \
         python3.12 python3.12-venv python3.12-dev python3-tk
 
 RUN sed -i 's/^# *zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen && \

@@ -1,4 +1,3 @@
-import time
 from dataclasses import dataclass, field
 
 from wechat_ai_bot.rpa.action_handlers.base_handler import (
@@ -12,7 +11,6 @@ from wechat_ai_bot.rpa.action_handlers.mixins.group_operations_mixin import (
 from wechat_ai_bot.rpa.action_handlers.mixins.window_operations_mixin import (
     WindowOperationsMixin,
 )
-from wechat_ai_bot.rpa.linux_window_manager import WindowTypeEnum
 
 
 @dataclass
@@ -46,13 +44,7 @@ class RenameNameInRoomHandler(WindowOperationsMixin, GroupOperationsMixin, BaseA
                 return False
             if not self._replace_input_text(action.name):
                 return False
-            confirm = self.window_manager.wait_for_window(
-                WindowTypeEnum.RoomInputConfirmBox,
-                timeout=5,
-            )
-            if confirm:
-                return self._click_confirm_button(self.get_window_region(confirm))
-            time.sleep(self.controller.window_manager.action_delay)
-            return True
+            self._trigger_room_input_confirmation()
+            return self._confirm_room_input_change(timeout=25)
         finally:
             self._cleanup()

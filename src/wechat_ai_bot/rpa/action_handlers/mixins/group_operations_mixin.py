@@ -1,9 +1,10 @@
 """Shared Linux group-sidebar helpers for RPA handlers."""
 
 import time
-from typing import Tuple
+from typing import Optional, Tuple
 
 import wechat_ai_bot.utils.mouse as pyautogui
+from wechat_ai_bot.rpa.linux_window_manager import WindowTypeEnum
 from wechat_ai_bot.rpa.ui_helper import BtnType
 from wechat_ai_bot.utils.helpers import get_center_point, set_clipboard_text
 from wechat_ai_bot.utils.mouse import human_like_mouse_move
@@ -36,6 +37,65 @@ class GroupOperationsMixin:
         time.sleep(self.controller.window_manager.action_delay)
         return True
 
+    def _confirm_room_input_change(self, timeout: float = 3) -> bool:
+        deadline = time.time() + max(0.5, timeout)
+        center_region = self._get_center_confirm_region()
+
+        while time.time() < deadline:
+            confirm = self._poll_confirm_window(
+                timeout=max(0.1, min(0.5, deadline - time.time()))
+            )
+            if confirm and self._click_confirm_button(self.get_window_region(confirm)):
+                return True
+
+            # Recent Linux WeChat builds often render this confirmation as an
+            # in-window overlay instead of a separate X11 window. Limit the
+            # fallback to the center dialog area so the chat send button cannot
+            # be mistaken for a confirmation.
+            if self._click_confirm_button(center_region):
+                return True
+
+            remaining = deadline - time.time()
+            if remaining > 0:
+                time.sleep(min(0.5, remaining))
+
+        self.logger.warning("未找到群设置输入确认按钮")
+        return False
+
+    def _trigger_room_input_confirmation(self) -> None:
+        if self._poll_confirm_window(timeout=0.5):
+            return
+        try:
+            self.window_manager.open_close_sidebar(close=True)
+        except Exception as exc:
+            self.logger.warning("触发群设置输入确认失败: %s", exc)
+
+    def _poll_confirm_window(self, timeout: float = 0.5):
+        get_window = getattr(self.window_manager, "get_window", None)
+        if callable(get_window):
+            deadline = time.time() + max(0.1, timeout)
+            while time.time() < deadline:
+                confirm = get_window(WindowTypeEnum.RoomInputConfirmBox)
+                if confirm:
+                    return confirm
+                time.sleep(0.1)
+            return None
+        return self.window_manager.wait_for_window(
+            WindowTypeEnum.RoomInputConfirmBox,
+            timeout=timeout,
+        )
+
+    def _get_center_confirm_region(self) -> list[int]:
+        width = int(getattr(self.window_manager.size_config, "width", 0) or 0)
+        height = int(getattr(self.window_manager.size_config, "height", 0) or 0)
+        if width <= 0 or height <= 0:
+            return [0, 0, 1, 1]
+        region_width = max(320, min(720, int(width * 0.7)))
+        region_height = max(220, min(520, int(height * 0.45)))
+        left = max(0, (width - region_width) // 2)
+        top = max(0, (height - region_height) // 2)
+        return [left, top, region_width, region_height]
+
     def _scroll_room_sidebar(self, clicks: int) -> None:
         region = self._get_room_side_bar_region()
         human_like_mouse_move(
@@ -54,8 +114,14 @@ class GroupOperationsMixin:
         below_multiplier: float = 1.6,
     ) -> bool:
         region = self._get_room_side_bar_region()
-        elements = self.ui_helper.find_text_elements(text=text, region=region, fuzzy=fuzzy)
+        elements = self.ui_helper.find_text_elements(
+            text=text,
+            region=region,
+            fuzzy=fuzzy,
+            save_path="/config/runtime_images/sidebar_text_ocr.png",
+        )
         if not elements:
+            self.logger.debug("未找到侧栏文本: text=%s region=%s", text, region)
             return False
         elements.sort(key=lambda item: item.get("pixel_bbox", [0, 0, 0, 0])[1])
         bbox = elements[0].get("pixel_bbox")
@@ -66,7 +132,7 @@ class GroupOperationsMixin:
         time.sleep(self.controller.window_manager.action_delay)
         return True
 
-    def _click_confirm_button(self, region=None) -> bool:
+    def _click_confirm_button(self, region: Optional[Tuple[int, int, int, int]] = None) -> bool:
         if region is None:
             region = [
                 0,
@@ -74,10 +140,14 @@ class GroupOperationsMixin:
                 int(self.window_manager.size_config.width),
                 int(self.window_manager.size_config.height),
             ]
-        for text in ("确定", "完成", "保存"):
-            button = self.ui_helper.find_and_click_text_element(text=text, region=region)
-            if button:
-                return True
+        button = self.ui_helper.find_and_click_text_candidate(
+            texts=("确定", "完成", "保存", "修改", "确认"),
+            region=region,
+            fuzzy=76,
+            save_path="/config/runtime_images/confirm_button_ocr.png",
+        )
+        if button:
+            return True
         button = self.ui_helper.find_btn_by_text(
             text="",
             btn_type=BtnType.GREEN,
