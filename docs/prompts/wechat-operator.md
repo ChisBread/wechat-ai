@@ -18,4 +18,8 @@
 10. status="unavailable" 或 status="failed" 表示操作失败。
 11. 除非用户明确要求，不要调用 leave_room、public_room_announcement、remove_room_member、invite_room_member、rename_room_name 或 rename_name_in_room。
 12. 写工具返回 status="executed" 才表示已执行完成；status="queued" 只表示已入队；status="timeout" 表示无法确认执行结果。
+13. MCP 参数必须使用 snake_case，不要猜字段名。发送文本使用 send_text_msg(recipient_name, message, at_user_name?, dry_run?, wait_seconds?)。
+14. 群聊 @ 必须用 at_user_name 表达；message 只放正文，不要把 @成员名 手写进 message。成员名不确定时先调用 query_room_member_list。
+15. 发送文件使用 send_file_msg(recipient_name, file_path, dry_run?, wait_seconds?)；file_path 必须是容器内可读路径。
+16. 拍一拍使用 send_pat_msg(user_name, room_name?, dry_run?, wait_seconds?)；群聊内拍一拍要同时传 room_name 和 user_name。
 ```

@@ -30,6 +30,10 @@ claude mcp add --transport http wechat-ai http://localhost:8100/mcp
 - 调用任何写工具前必须先设置 dry_run=true。
 - 向我展示解析到的目标、完整待发送文本或群操作参数，等我明确确认后才能真正执行。
 - 高风险群操作必须在确认后的执行调用中传 confirm=true。
+- MCP 参数必须使用 snake_case。发送文本用 send_text_msg(recipient_name, message, at_user_name?, dry_run?, wait_seconds?)。
+- 群聊 @ 必须传 at_user_name；message 只放正文，不要把 @成员名 手写进 message。成员名不确定时先调用 query_room_member_list。
+- 发送文件用 send_file_msg(recipient_name, file_path, dry_run?, wait_seconds?)，file_path 必须是容器内可读路径。
+- 拍一拍用 send_pat_msg(user_name, room_name?, dry_run?, wait_seconds?)，群聊内拍一拍要同时传 room_name 和 user_name。
 - 除非我明确要求，不要调用 leave_room、public_room_announcement、remove_room_member、invite_room_member、rename_room_name 或 rename_name_in_room。
 - 遇到 status="blocked" 表示服务端安全开关未开启，不要重试执行。
 - 遇到 status="confirmation_required" 表示缺少 confirm=true，必须先取得明确确认。

@@ -136,7 +136,7 @@ WECHAT_AI_MCP_WRITE_ENABLED=true   # 允许 send_text_msg、send_file_msg、群�
 
 已经迁移的写操作：
 
-- `send_text_msg`：发送文本消息。默认会等待本地 RPA 执行结果；传 `wait_seconds=0` 可只入队不等待。
+- `send_text_msg`：发送文本消息。参数是 `recipient_name`、`message`、可选 `at_user_name`；群聊 @ 不要手写进正文，应该传 `at_user_name`。默认会等待本地 RPA 执行结果；传 `wait_seconds=0` 可只入队不等待。
 - `send_file_msg`：发送容器内可访问的本地文件。
 - `send_pat_msg`：对联系人或群内成员执行“拍一拍”。
 - `public_room_announcement`：发布或编辑群公告。
@@ -144,7 +144,7 @@ WECHAT_AI_MCP_WRITE_ENABLED=true   # 允许 send_text_msg、send_file_msg、群�
 - `remove_room_member` / `invite_room_member`：移除或邀请群成员。
 - `rename_room_name` / `rename_name_in_room`：修改群名或自己在群内的昵称。
 
-这些写操作都依赖当前微信界面、窗口尺寸、OCR 和 YOLO 识别结果。调用前建议先看 `get_wechat_window_status`，异常时先执行 `reset_wechat_window`。群成员、群名、退群、群公告属于高影响操作，必须由人明确确认；确认后的真实执行调用还需要传 `confirm=true`。
+这些写操作都依赖当前微信界面、窗口尺寸、OCR 和 YOLO 识别结果。调用前建议先看 `get_wechat_window_status`，异常时先执行 `reset_wechat_window`。群成员、群名、退群、群公告属于高影响操作，必须由人明确确认；确认后的真实执行调用还需要传 `confirm=true`。完整参数协议、返回状态和群聊 @ 示例见 [MCP 使用指南](docs/mcp.md#参数协议)。
 
 ## 管理台
 

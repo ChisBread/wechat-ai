@@ -151,6 +151,117 @@ OpenClaw 或类似支持 MCP JSON 配置的客户端可使用 Streamable HTTP：
 
 这些写操作都依赖当前微信界面、窗口尺寸、OCR 和 YOLO 识别结果。调用前建议先确认 `get_wechat_window_status` 返回窗口已对齐；异常时先调用 `reset_wechat_window`。
 
+## 参数协议
+
+MCP 工具参数一律使用 `snake_case`，不要把 Web API、RPA action 或自然语言里的字段名混用进 MCP 调用。写操作前建议先调用 `dry_run=true`，根据返回的 `resolved`、`action_data` 和 `message_preview` 向人类展示确认内容。
+
+不要向 MCP 写工具传 `target`、`content`、`is_chatroom`、`at_list` 这类内部字段；这些字段属于 RPA payload，不是 MCP 协议。MCP 会根据 `recipient_name` / `room_name` 解析联系人并自动判断是否群聊。
+
+### 通用约定
+
+| 字段 | 适用工具 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `dry_run` | 写操作 | `false` | `true` 时只解析目标和动作参数，不进入 RPA 队列，也不要求写开关。 |
+| `wait_seconds` | RPA 写操作 | 文本 `12`，群改名类 `25`，其他 `12` | 等待本地 RPA 执行结果；`0` 表示只入队不等待。文本发送范围 `0-30` 秒，其他 RPA 动作范围 `0-60` 秒。 |
+| `confirm` | 高影响群操作 | `false` | 退群、群公告、邀请/移除成员、改群名、改群昵称真实执行时必须传 `true`。 |
+| `contact_name` / `recipient_name` / `room_name` | 联系人、消息和写操作 | 无 | 可以是微信 ID、群 ID、备注、昵称或显示名；Agent 应先用 `search_contacts` / `get_contact_detail` 解析。 |
+
+### 状态与运维工具
+
+| 工具 | 参数 |
+| --- | --- |
+| `get_timestamp` | 无 |
+| `get_runtime_status` | 无 |
+| `get_wechat_user_info` | 无 |
+| `get_wechat_window_status` | 无 |
+| `reset_wechat_window` | 无。需要 `WECHAT_AI_MCP_ADMIN_ENABLED=true`。 |
+| `get_database_status` | 无 |
+| `refresh_database` | 无。需要 `WECHAT_AI_MCP_ADMIN_ENABLED=true`。 |
+| `set_message_polling` | `paused: bool`。`true` 暂停消息监听，`false` 恢复。需要 `WECHAT_AI_MCP_ADMIN_ENABLED=true`。 |
+| `discover_dat_keys` | `send_probe: bool = true`，`scan_timeout_seconds: float = 120`。需要 admin；`send_probe=true` 时还需要 write。 |
+
+### 联系人与消息读取工具
+
+| 工具 | 参数 | 说明 |
+| --- | --- | --- |
+| `search_contacts` | `query: str`，`limit: int = 20`，`include_chatrooms: bool = true`，`include_contacts: bool = true` | `limit` 范围 `1-100`。 |
+| `get_contact_detail` | `contact_name: str` | 返回联系人/群聊详情；群聊会尽量返回成员数量。 |
+| `get_recent_chats` | `limit: int = 20` | `limit` 范围 `1-100`。 |
+| `query_room_member_list` | `room_name: str` | 从数据库读取群成员列表，常用于群聊 @、拍一拍、移除成员前确认成员名。 |
+| `get_recent_messages` | `contact_name: str`，`limit: int = 30`，`include_non_text: bool = true`，`parse_media: bool = false` | `limit` 范围 `1-200`；`parse_media=true` 时解析图片、视频、文件路径。 |
+| `search_text_messages` | `contact_name: str`，`query: str \| null = null`，`start_timestamp: int \| null = null`，`end_timestamp: int \| null = null`，`limit: int = 100` | 时间戳为 Unix 秒；`limit` 范围 `1-500`。 |
+| `get_recent_media_messages` | `contact_name: str`，`limit: int = 20` | 只返回最近非文本消息，`limit` 范围 `1-100`。 |
+| `get_chat_summary_context` | `contact_name: str`，`limit: int = 40` | 返回适合放进 LLM 上下文的紧凑文本，`limit` 范围 `1-120`。 |
+| `query_wechat_msg` | `contact_name: str`，`query: str \| null = null`，`start_timestamp: int \| null = null`，`end_timestamp: int \| null = null`，`limit: int = 500` | 兼容旧版文本查询工具，新接入优先用 `search_text_messages`。 |
+
+### 写操作工具
+
+| 工具 | 参数 | 说明 |
+| --- | --- | --- |
+| `send_text_msg` | `recipient_name: str`，`message: str`，`at_user_name: str \| null = null`，`dry_run: bool = false`，`wait_seconds: float = 12` | 给联系人或群聊发文本。群聊 @ 使用 `at_user_name`，不要把 `@成员名` 手写进 `message`。 |
+| `send_file_msg` | `recipient_name: str`，`file_path: str`，`dry_run: bool = false`，`wait_seconds: float = 12` | `file_path` 必须是容器内可读文件路径，例如 `/config/exports/report.pdf`。 |
+| `send_pat_msg` | `user_name: str`，`room_name: str \| null = null`，`dry_run: bool = false`，`wait_seconds: float = 12` | 私聊拍一拍只传 `user_name`；群聊拍一拍传 `room_name` 和群内成员 `user_name`。 |
+| `public_room_announcement` | `room_name: str`，`content: str`，`force_edit: bool = false`，`confirm: bool = false` | 发布或编辑群公告；真实执行必须 `confirm=true`。 |
+| `leave_room` | `room_name: str`，`confirm: bool = false` | 退群；真实执行必须 `confirm=true`。 |
+| `remove_room_member` | `room_name: str`，`member_name: str`，`dry_run: bool = false`，`wait_seconds: float = 12`，`confirm: bool = false` | 移除群成员；真实执行必须 `confirm=true`。 |
+| `invite_room_member` | `room_name: str`，`user_name: str`，`dry_run: bool = false`，`wait_seconds: float = 12`，`confirm: bool = false` | 邀请联系人进群；真实执行必须 `confirm=true`。 |
+| `rename_room_name` | `room_name: str`，`new_name: str`，`dry_run: bool = false`，`wait_seconds: float = 25`，`confirm: bool = false` | 修改群名；真实执行必须 `confirm=true`。 |
+| `rename_name_in_room` | `room_name: str`，`new_name_in_room: str`，`dry_run: bool = false`，`wait_seconds: float = 25`，`confirm: bool = false` | 修改当前账号在群里的昵称；真实执行必须 `confirm=true`。 |
+
+### 群聊 @ 协议
+
+群聊 @ 必须通过 `send_text_msg.at_user_name` 表达，`message` 只放真正要发送的正文。比如用户要求“在测试群 @Bread 发送 机器人测试”，调用应写成：
+
+```json
+{
+  "tool": "send_text_msg",
+  "arguments": {
+    "recipient_name": "测试群",
+    "message": "机器人测试",
+    "at_user_name": "Bread",
+    "dry_run": true
+  }
+}
+```
+
+确认后再去掉 `dry_run`：
+
+```json
+{
+  "tool": "send_text_msg",
+  "arguments": {
+    "recipient_name": "测试群",
+    "message": "机器人测试",
+    "at_user_name": "Bread",
+    "wait_seconds": 20
+  }
+}
+```
+
+注意：
+
+- 不要把正文写成 `@Bread 机器人测试`，否则 RPA 会把 `@` 当作普通输入或造成重复 @。
+- `at_user_name` 传群成员在微信里可搜索/可显示的名字，例如备注、群昵称或昵称。成员名不确定时，先调用 `query_room_member_list`。
+- 当前 MCP 协议一次只接受一个 `at_user_name`；需要多人 @ 时，应先确认前端 RPA 支持情况，避免自行拼接多个 `@`。
+
+### 返回状态
+
+工具返回 JSON 字符串。Agent 不应只看 HTTP 成功，而要检查 JSON 里的 `status`：
+
+| `status` | 含义 | Agent 处理方式 |
+| --- | --- | --- |
+| `ok` | 读取或运维工具成功。 | 可以使用返回数据继续任务。 |
+| `dry_run` | 写操作只完成目标解析，没有执行。 | 展示 `resolved`、`action_data`、`message_preview` 给人确认。 |
+| `queued` | 动作已进入 RPA 队列，但没有确认执行完成。 | 不要直接宣称成功；可查看日志、状态或等待用户确认。 |
+| `executed` | RPA 返回完成，并且 `result.ok=true`。 | 可以说明操作已执行。 |
+| `failed` | RPA 返回完成，但执行失败。 | 把 `result.reason` / `result.error` 展示给用户，不要自动重复高风险操作。 |
+| `timeout` | 动作已提交，但等待超时。 | 不要盲目重试发送，先检查微信界面、队列和日志，避免重复操作。 |
+| `blocked` | MCP 安全开关未开启。 | 提示用户检查 `WECHAT_AI_MCP_ADMIN_ENABLED` 或 `WECHAT_AI_MCP_WRITE_ENABLED`。 |
+| `confirmation_required` | 高影响操作缺少 `confirm=true`。 | 先向人类确认，确认后再带 `confirm=true` 调用。 |
+| `invalid_request` | 参数缺失或不合法。 | 修正参数名、路径、目标名后重试。 |
+| `not_found` | 未找到联系人、群聊或成员。 | 先用搜索工具重新解析目标。 |
+| `unavailable` / `error` | 运行时、数据库、窗口或工具异常。 | 停止写操作，报告阻塞原因。 |
+
 ## Dashboard 与 MCP 暴露建议
 
 Dashboard 地址是 `http://localhost:8100/dashboard`，内置 Basic Auth。账号密码来自 `WECHAT_AI_DASHBOARD_USERNAME` / `WECHAT_AI_DASHBOARD_PASSWORD`，默认 `wechat/wechat` 会被拒绝登录。Dashboard 状态变更 POST 还要求 `X-WeChat-AI-Dashboard: 1`，页面会自动携带；脚本调用时需要手动加。MCP 地址是 `http://localhost:8100/mcp`，需要 Bearer token，默认 `WECHAT_AI_MCP_TOKEN=wechat` 会被拒绝。
@@ -210,6 +321,20 @@ Linux 微信 4.x 图片通常是加密 `.dat`：
     "recipient_name": "张三",
     "message": "我稍后回复你。",
     "wait_seconds": 12
+  }
+}
+```
+
+群聊 @：
+
+```json
+{
+  "tool": "send_text_msg",
+  "arguments": {
+    "recipient_name": "测试群",
+    "message": "机器人测试",
+    "at_user_name": "Bread",
+    "dry_run": true
   }
 }
 ```
