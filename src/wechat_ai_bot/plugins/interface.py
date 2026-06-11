@@ -316,7 +316,7 @@ class DatabaseService(Protocol):
             query (Optional[str], optional): 要在消息内容中搜索的文本。默认为 None。
 
         Returns:
-            List[tuple]: 包含 (message_content, sender_username, db_path) 的元组列表。
+            List[tuple]: 包含 (message_content, sender_username, db_path, create_time, server_id, ct_flag) 的元组列表。
         """
         ...
 

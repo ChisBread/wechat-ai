@@ -320,11 +320,11 @@ class LinuxDatabaseService:
                 params.append(f"%{query}%")
             params.append(int(limit))
             sql = (
-                f"select message_content, real_sender_id, create_time, server_id "
+                f"select message_content, real_sender_id, create_time, server_id, WCDB_CT_message_content "
                 f"from {self._q(table)} where {' and '.join(clauses)} "
                 f"order by sort_seq {direction} limit ?"
             )
-            for content, sender_id, create_time, server_id in self.execute_query(
+            for content, sender_id, create_time, server_id, ct_flag in self.execute_query(
                 db_path, sql, tuple(params)
             ):
                 sender = self.get_contact_by_sender_id(sender_id, db_path)
@@ -335,6 +335,7 @@ class LinuxDatabaseService:
                         str(db_path),
                         create_time,
                         server_id,
+                        ct_flag,
                     )
                 )
         reverse = direction == "desc"

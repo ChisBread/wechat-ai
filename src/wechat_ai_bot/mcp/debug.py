@@ -29,6 +29,7 @@ from wechat_ai_bot.services.core.wechat_dat import (
     infer_xor_key,
     parse_dat_file,
 )
+from wechat_ai_bot.weixin.message_content import message_content_text
 from wechat_ai_bot.services.core.wechat_dat_key_discovery import derive_dat_key_for_file
 
 
@@ -956,17 +957,24 @@ def _contact_payload(contact: Any) -> dict[str, Any]:
 
 
 def _text_message_payload(database_service: Any, row: tuple) -> dict[str, Any]:
-    content, sender_username, db_path, create_time, server_id = row
+    content = row[0] if len(row) > 0 else ""
+    sender_username = row[1] if len(row) > 1 else ""
+    db_path = row[2] if len(row) > 2 else ""
+    create_time = row[3] if len(row) > 3 else None
+    server_id = row[4] if len(row) > 4 else ""
+    ct_flag = row[5] if len(row) > 5 else None
+    sender_username = str(sender_username or "")
+    db_path = str(db_path or "")
     sender = None
     try:
         sender = database_service.get_contact_by_username(sender_username)
     except Exception:
         pass
     return {
-        "text": _truncate_text(str(content or ""), 4000),
+        "text": _message_content_text(content, ct_flag, 4000),
         "sender_username": sender_username or "",
         "sender_display": getattr(sender, "display_name", "") if sender else sender_username or "",
-        "db_path": str(db_path or ""),
+        "db_path": db_path,
         "create_time": create_time,
         "time": _format_timestamp(create_time),
         "server_id": str(server_id or ""),
@@ -1044,10 +1052,18 @@ def _rich_message_payload(
         "time": _format_timestamp(row[5] if len(row) > 5 else None),
         "direction": direction,
         "db_path": str(db_path or ""),
-        "raw_content": _truncate_text(str(row[12] if len(row) > 12 else ""), 1200),
+        "raw_content": _message_content_text(
+            row[12] if len(row) > 12 else "",
+            row[15] if len(row) > 15 else None,
+            1200,
+        ),
     }
     if local_type in (1, 2):
-        payload["text"] = _truncate_text(str(row[12] if len(row) > 12 else ""), 4000)
+        payload["text"] = _message_content_text(
+            row[12] if len(row) > 12 else "",
+            row[15] if len(row) > 15 else None,
+            4000,
+        )
         return payload
     if not parse_media:
         payload["text"] = f"[{payload['type_name']}]"
@@ -1080,17 +1096,29 @@ def _factory_message_payload(factory_service: Any, table_name: str, row: tuple) 
     }
     if not factory_service:
         payload["factory_error"] = "message factory service unavailable"
-        payload["raw_content"] = _truncate_text(str(row[12] if len(row) > 12 else ""), 800)
+        payload["raw_content"] = _message_content_text(
+            row[12] if len(row) > 12 else "",
+            row[15] if len(row) > 15 else None,
+            800,
+        )
         return payload
     try:
         message = factory_service.create_message((table_name, row))
     except Exception as exc:
         payload["factory_error"] = f"{type(exc).__name__}: {exc}"
-        payload["raw_content"] = _truncate_text(str(row[12] if len(row) > 12 else ""), 800)
+        payload["raw_content"] = _message_content_text(
+            row[12] if len(row) > 12 else "",
+            row[15] if len(row) > 15 else None,
+            800,
+        )
         return payload
     if not message:
         payload["factory_error"] = "unsupported message type"
-        payload["raw_content"] = _truncate_text(str(row[12] if len(row) > 12 else ""), 800)
+        payload["raw_content"] = _message_content_text(
+            row[12] if len(row) > 12 else "",
+            row[15] if len(row) > 15 else None,
+            800,
+        )
         return payload
 
     payload["factory_ok"] = True
@@ -1527,6 +1555,10 @@ def _message_text(message: Any) -> str:
     except Exception:
         text = getattr(message, "content", "") or getattr(message, "message_content", "")
     return _truncate_text(str(text or ""), 1200)
+
+
+def _message_content_text(value: Any, ct_flag: Any, limit: int) -> str:
+    return _truncate_text(message_content_text(value, ct_flag), limit)
 
 
 def _message_type_name(local_type: Any) -> str:

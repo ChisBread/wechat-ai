@@ -11,7 +11,7 @@ from typing import Any, List, Optional, Union
 import xmltodict
 from wechat_ai_bot.models import UserInfo
 
-from .parser.util.common import decompress
+from .message_content import message_content_text
 
 
 class DownloadStatus:
@@ -178,21 +178,17 @@ class Message:
     def parsed_source(self):
         """获取解析后的消息来源，使用缓存避免重复处理"""
         if not hasattr(self, "_parsed_source"):
-            source = self.source
-            if isinstance(source, bytes):
-                source = decompress(source)
-            self._parsed_source = source
+            self._parsed_source = message_content_text(self.source)
         return self._parsed_source
 
     @property
-    def parsed_content(self) -> Union[str, bytes]:
+    def parsed_content(self) -> str:
         """获取解析后的消息内容，使用缓存避免重复处理"""
         if not hasattr(self, "_parsed_content"):
-            message_content = self.message_content
-            if isinstance(message_content, bytes):
-                message_content = decompress(message_content)
+            message_content = message_content_text(self.message_content)
             if (
                 self.room != None
+                and self.contact is not None
                 and isinstance(message_content, str)
                 and not self.is_self
                 and self.local_type != MessageType.Pat

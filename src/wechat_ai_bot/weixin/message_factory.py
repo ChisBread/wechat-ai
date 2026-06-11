@@ -14,11 +14,11 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 from pathlib import Path
 import xmltodict
-import zstandard as zstd
 from google.protobuf.json_format import MessageToDict
 from wechat_ai_bot.models import UserInfo
 
 from .message_classes import *
+from .message_content import message_content_text
 from .parser.audio_parser import parser_audio
 from .parser.emoji_parser import parser_emoji
 from .parser.file_parser import parse_video
@@ -37,7 +37,7 @@ from .parser.link_parser import (
     parser_voip,
     parser_wechat_video,
 )
-from .parser.util.common import decompress, get_md5_from_xml
+from .parser.util.common import get_md5_from_xml
 from .parser.util.protocbuf import (
     packed_info_data_pb2,
     packed_info_data_img2_pb2,
@@ -148,9 +148,10 @@ class TextMessageFactory(MessageFactory):
             message_db_path=message[17],
             contact=contact,
             room=room,
-            content=message[12],
+            content="",
             user_info=user_info,
         )
+        msg.content = msg.parsed_content
         return msg
 
 
@@ -1008,9 +1009,7 @@ class SystemMessageFactory(MessageFactory):
             user_info=user_info,
         )
 
-        message_content = message[12]
-        if isinstance(message[12], bytes):
-            message_content = decompress(message[12])
+        message_content = message_content_text(message[12])
 
         # [FIXED] Safely handle chatroom system messages and XML parsing
         try:

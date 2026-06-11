@@ -30,6 +30,7 @@ from wechat_ai_bot.mcp.dispatchers import (
 from wechat_ai_bot.mcp.protocols import CommandDispatcher
 from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.rpa.rpa_action import RPAActionType
+from wechat_ai_bot.weixin.message_content import message_content_text
 from wechat_ai_bot.weixin.message_classes import MessageType
 
 logger = logging.getLogger(__name__)
@@ -487,6 +488,18 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             return text
         return text[: max(0, limit - 3)] + "..."
 
+    def _message_content_text(value: Any, ct_flag: Any, limit: int) -> str:
+        return _truncate_text(message_content_text(value, ct_flag), limit)
+
+    def _unpack_text_search_row(row: tuple) -> tuple[Any, str, str, Any, Any, Any]:
+        content = row[0] if len(row) > 0 else ""
+        sender_username = row[1] if len(row) > 1 else ""
+        db_path = row[2] if len(row) > 2 else ""
+        create_time = row[3] if len(row) > 3 else None
+        server_id = row[4] if len(row) > 4 else ""
+        ct_flag = row[5] if len(row) > 5 else None
+        return content, str(sender_username or ""), str(db_path or ""), create_time, server_id, ct_flag
+
     def _message_payload(db: Any, row: tuple, *, include_text: bool = True) -> dict[str, Any]:
         local_type = row[2] if len(row) > 2 else None
         sender = None
@@ -507,7 +520,11 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             "time": _format_timestamp(row[5] if len(row) > 5 else None),
         }
         if include_text and local_type in (MessageType.Text, MessageType.Text2):
-            payload["text"] = _truncate_text(str(row[12] if len(row) > 12 else ""), 4000)
+            payload["text"] = _message_content_text(
+                row[12] if len(row) > 12 else "",
+                row[15] if len(row) > 15 else None,
+                4000,
+            )
         return payload
 
     def _rows_for_contact(db: Any, contact: Any, limit: int, order: str = "desc") -> list[tuple]:
@@ -535,7 +552,11 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         if not message:
             payload["factory_ok"] = False
             payload["factory_error"] = "unsupported message type"
-            payload["raw_content"] = _truncate_text(str(row[12] if len(row) > 12 else ""), 1200)
+            payload["raw_content"] = _message_content_text(
+                row[12] if len(row) > 12 else "",
+                row[15] if len(row) > 15 else None,
+                1200,
+            )
             return payload
 
         payload["factory_ok"] = True
@@ -956,11 +977,12 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         )
         rows.reverse()
         messages = []
-        for content, sender_username, db_path, create_time, server_id in rows:
+        for row in rows:
+            content, sender_username, db_path, create_time, server_id, ct_flag = _unpack_text_search_row(row)
             sender = db.get_contact_by_username(sender_username)
             messages.append(
                 {
-                    "text": _truncate_text(str(content or ""), 4000),
+                    "text": _message_content_text(content, ct_flag, 4000),
                     "sender_username": sender_username or "",
                     "sender_display": getattr(sender, "display_name", "") if sender else sender_username or "",
                     "create_time": create_time,
@@ -1100,12 +1122,13 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         )
         msg_list.reverse()
         processed = []
-        for content, sender_username, _db_path, create_time, server_id in msg_list:
+        for row in msg_list:
+            content, sender_username, _db_path, create_time, server_id, ct_flag = _unpack_text_search_row(row)
             sender = db.get_contact_by_username(sender_username)
             processed.append(
                 {
                     "from": sender.display_name if sender else sender_username or "未知发件人",
-                    "text": content,
+                    "text": _message_content_text(content, ct_flag, 4000),
                     "create_time": create_time,
                     "server_id": str(server_id),
                 }

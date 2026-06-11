@@ -5,6 +5,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from wechat_ai_bot.mcp.debug import _dashboard_html, build_layout_png, mask_value, redact_text, tail_file
 from wechat_ai_bot.mcp.app import create_app
@@ -135,6 +136,14 @@ class DummyMediaContact(DummyContact):
     alias = ""
 
 
+class DummyCompressedContact(DummyContact):
+    id = 4
+    username = "compressed"
+    remark = "Compressed"
+    nick_name = "Compressed Nick"
+    alias = ""
+
+
 class DummyDatabaseService:
     is_available = True
     last_error = ""
@@ -153,15 +162,18 @@ class DummyDatabaseService:
         self.contact = DummyContact()
         self.room = DummyRoomContact()
         self.media = DummyMediaContact()
+        self.compressed = DummyCompressedContact()
         self._contact_by_username = {
             self.contact.username: self.contact,
             self.room.username: self.room,
             self.media.username: self.media,
+            self.compressed.username: self.compressed,
         }
         self._message_username_map = {
             self.contact.username: {Path("/tmp/message_0.db")},
             self.room.username: {Path("/tmp/message_0.db")},
             self.media.username: {Path("/tmp/message_0.db")},
+            self.compressed.username: {Path("/tmp/message_0.db")},
         }
         self.refreshed = False
 
@@ -173,6 +185,8 @@ class DummyDatabaseService:
             return [self.contact]
         if name in {"Room", "room"}:
             return [self.room]
+        if name in {"Compressed", "compressed"}:
+            return [self.compressed]
         return []
 
     def get_contact_by_sender_id(self, sender_id, message_db_path=None):
@@ -222,14 +236,46 @@ class DummyDatabaseService:
             "/tmp/message_0.db",
         )
 
+    def _compressed_text(self):
+        return b"\x28\xb5\x2f\xfd\x00compressed-message"
+
+    def _compressed_text_row(self):
+        return (
+            3,
+            1003,
+            1,
+            12,
+            1,
+            1780998120,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "",
+            self._compressed_text(),
+            None,
+            None,
+            4,
+            None,
+            "/tmp/message_0.db",
+        )
+
     def get_messages_by_username(self, username, count=10, order="desc"):
-        rows = [self._image_row() if username == "media" else self._text_row()]
+        if username == "media":
+            rows = [self._image_row()]
+        elif username == "compressed":
+            rows = [self._compressed_text_row()]
+        else:
+            rows = [self._text_row()]
         return rows[:count]
 
     def get_image(self, xml_content, message, up_dir="", md5=None, thumb=False, sender_wxid=""):
         return Path("msg/attach/alice/2026-06/Img/image_t.dat" if thumb else "msg/attach/alice/2026-06/Img/image.dat")
 
     def query_text_messages(self, username, query=None, start_timestamp=None, end_timestamp=None, limit=10):
+        if username == "compressed":
+            return [(self._compressed_text(), "alice", "/tmp/message_0.db", 1780998120, 1003, 4)]
         return [("hello", "alice", "/tmp/message_0.db", 1780998000, 1001)]
 
     def get_room_member_list(self, username):
@@ -577,10 +623,35 @@ class DebugRoutesTest(unittest.TestCase):
         self.assertEqual(searched["status"], "ok")
         self.assertEqual(searched["messages"][0]["text"], "hello")
 
+    def test_mcp_message_tools_decode_zstd_bytes_text(self):
+        with patch(
+            "wechat_ai_bot.weixin.message_content.decompress_zstd_text",
+            return_value="面试官：你好，欢迎加入测试",
+        ):
+            app = create_app(
+                UserInfo(account="me"),
+                DummyConfig({"debug": {"enabled": False}, "mcp": {"port": 8000}}),
+                bot=DummyMcpBot(),
+            )
+
+            recent = json.loads(app._tool_manager._tools["get_recent_messages"].fn(None, "Compressed", 5))
+            searched = json.loads(app._tool_manager._tools["search_text_messages"].fn(None, "Compressed", None))
+
+        self.assertEqual(recent["messages"][0]["text"], "面试官：你好，欢迎加入测试")
+        self.assertEqual(searched["messages"][0]["text"], "面试官：你好，欢迎加入测试")
+        self.assertNotIn("b'", recent["messages"][0]["text"])
+        self.assertNotIn("b'", searched["messages"][0]["text"])
+
     def test_dashboard_wechat_api_payloads(self):
         from starlette.testclient import TestClient
 
-        with dashboard_auth_env():
+        with (
+            dashboard_auth_env(),
+            patch(
+                "wechat_ai_bot.weixin.message_content.decompress_zstd_text",
+                return_value="面试官：你好，欢迎加入测试",
+            ),
+        ):
             app = create_app(
                 UserInfo(account="me"),
                 DummyConfig({"debug": {"enabled": True}, "mcp": {"port": 8000}}),
@@ -595,6 +666,8 @@ class DebugRoutesTest(unittest.TestCase):
             status = client.get("/dashboard/api/status?show_sensitive=1", headers=headers)
             detail = client.get("/dashboard/api/contact/detail?username=room@chatroom", headers=headers)
             recent = client.get("/dashboard/api/messages/recent?username=alice", headers=headers)
+            compressed = client.get("/dashboard/api/messages/recent?username=compressed", headers=headers)
+            compressed_search = client.get("/dashboard/api/messages?username=compressed", headers=headers)
 
         self.assertEqual(chats.status_code, 200)
         self.assertTrue(chats.json()["chats"])
@@ -608,6 +681,12 @@ class DebugRoutesTest(unittest.TestCase):
         self.assertEqual(detail.json()["member_count"], 1)
         self.assertEqual(recent.status_code, 200)
         self.assertEqual(recent.json()["messages"][0]["text"], "hello")
+        self.assertEqual(compressed.status_code, 200)
+        self.assertEqual(compressed.json()["messages"][0]["text"], "面试官：你好，欢迎加入测试")
+        self.assertNotIn("b'", compressed.json()["messages"][0]["text"])
+        self.assertEqual(compressed_search.status_code, 200)
+        self.assertEqual(compressed_search.json()["messages"][0]["text"], "面试官：你好，欢迎加入测试")
+        self.assertNotIn("b'", compressed_search.json()["messages"][0]["text"])
 
     def test_dashboard_media_payload_and_proxy(self):
         from starlette.testclient import TestClient
