@@ -10,7 +10,6 @@ from wechat_ai_bot.rpa.action_handlers.base_handler import (
 from wechat_ai_bot.rpa.action_handlers.mixins.window_operations_mixin import (
     WindowOperationsMixin,
 )
-from wechat_ai_bot.utils.helpers import get_center_point
 from wechat_ai_bot.utils.mouse import human_like_mouse_move
 
 
@@ -38,7 +37,10 @@ class PatHandler(WindowOperationsMixin, BaseActionHandler):
             region = self.window_manager.get_message_region()
             if not region:
                 return False
-            screenshot = self.image_processor.take_screenshot(region=region)
+            screenshot = self.image_processor.take_screenshot(
+                region=region,
+                save_path="/config/runtime_images/pat_message_region.png",
+            )
             if screenshot is None:
                 return False
             avatar = self._find_avatar_for_pat(screenshot, action)
@@ -46,13 +48,22 @@ class PatHandler(WindowOperationsMixin, BaseActionHandler):
                 self.logger.warning("No visible avatar found for pat action")
                 return False
             bbox = avatar.get("pixel_bbox")
-            center = get_center_point(bbox)
-            human_like_mouse_move(center[0] + region[0], center[1] + region[1])
-            pyautogui.click(button="right")
+            click_x, click_y = self._avatar_safe_click_point(bbox)
+            screen_x = click_x + region[0]
+            screen_y = click_y + region[1]
+            self.logger.info("Pat right-click avatar at %s,%s bbox=%s", screen_x, screen_y, bbox)
+            human_like_mouse_move(screen_x, screen_y)
+            pyautogui.click(screen_x, screen_y, button="right")
             time.sleep(self.controller.window_manager.action_delay)
             return self.find_and_click_menu_item("拍一拍")
         finally:
             self._cleanup()
+
+    def _avatar_safe_click_point(self, bbox) -> tuple[int, int]:
+        x1, y1, x2, y2 = [int(v) for v in bbox]
+        width = max(1, x2 - x1)
+        height = max(1, y2 - y1)
+        return x1 + max(4, min(width - 4, int(width * 0.42))), y1 + height // 2
 
     def _find_avatar_for_pat(self, screenshot, action: PatAction):
         avatars = [
@@ -60,10 +71,26 @@ class PatHandler(WindowOperationsMixin, BaseActionHandler):
             for item in self.image_processor.detect_objects(image=screenshot)
             if item.get("label") == "avatar"
         ]
+        self.logger.info(
+            "Pat avatar detection: total=%s target=%s user=%s is_chatroom=%s",
+            len(avatars),
+            action.target,
+            action.user_name,
+            action.is_chatroom,
+        )
+        try:
+            self.image_processor.draw_boxes_on_screen(
+                screenshot.copy(),
+                avatars,
+                output_path="/config/runtime_images/pat_avatars.png",
+            )
+        except Exception as exc:
+            self.logger.debug("Failed to save pat avatar debug image: %s", exc)
         left_avatars = [
             item for item in avatars
             if item.get("pixel_bbox") and item["pixel_bbox"][0] / max(self.window_manager.MSG_WIDTH, 1) < 0.5
         ]
+        self.logger.info("Pat left-side avatar candidates: %s", len(left_avatars))
         if not left_avatars:
             return None
         if not action.is_chatroom or not action.user_name:
@@ -71,6 +98,7 @@ class PatHandler(WindowOperationsMixin, BaseActionHandler):
             return left_avatars[0]
 
         names = self.ocr_processor.find_text(image=screenshot, target_text=action.user_name)
+        self.logger.info("Pat OCR name matches for %r: %s", action.user_name, len(names))
         if not names:
             return None
         best = None

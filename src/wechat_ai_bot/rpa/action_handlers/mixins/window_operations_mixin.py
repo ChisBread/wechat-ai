@@ -10,8 +10,9 @@ from wechat_ai_bot.utils.mouse import human_like_mouse_move
 
 
 class WindowOperationsMixin:
-    def get_window_region(self, window: Any) -> Tuple[int, int, int, int]:
-        margin = int(getattr(self.controller.window_manager, "window_margin", 20))
+    def get_window_region(self, window: Any, margin: int | None = None) -> Tuple[int, int, int, int]:
+        if margin is None:
+            margin = int(getattr(self.controller.window_manager, "window_margin", 20))
         return [
             int(getattr(window, "left", 0)) + margin,
             int(getattr(window, "top", 0)) + margin,
@@ -23,10 +24,14 @@ class WindowOperationsMixin:
         menu_window = self.controller.window_manager.wait_for_window(
             WindowTypeEnum.MenuWindow
         )
-        if not menu_window:
-            return False
+        if menu_window:
+            region = self.get_window_region(menu_window, margin=2)
+            if self._find_and_click_menu_item_in_region(menu_text, region):
+                return True
+        return self._find_and_click_menu_item_near_mouse(menu_text)
+
+    def _find_and_click_menu_item_in_region(self, menu_text: str, region: Tuple[int, int, int, int]) -> bool:
         try:
-            region = self.get_window_region(menu_window)
             results = self.ocr_processor.process_image(
                 image=self.controller.image_processor.take_screenshot(
                     region=region,
@@ -47,3 +52,21 @@ class WindowOperationsMixin:
         except Exception as exc:
             self.logger.error("查找并点击菜单项失败: %s", exc)
         return False
+
+    def _find_and_click_menu_item_near_mouse(self, menu_text: str) -> bool:
+        try:
+            x, y = pyautogui.position()
+            screen = pyautogui.size()
+            left = max(0, int(x) - 80)
+            top = max(0, int(y) - 80)
+            region = [
+                left,
+                top,
+                min(420, max(1, int(screen.width) - left)),
+                min(620, max(1, int(screen.height) - top)),
+            ]
+            self.logger.info("MenuWindow not found; OCR menu fallback region=%s", region)
+            return self._find_and_click_menu_item_in_region(menu_text, region)
+        except Exception as exc:
+            self.logger.error("菜单 OCR 兜底失败: %s", exc)
+            return False

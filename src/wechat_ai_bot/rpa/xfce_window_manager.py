@@ -264,7 +264,7 @@ class XFCEWindowManager:
         window_type: WindowTypeEnum,
         all_windows: bool = False,
     ) -> Optional[XdotoolWindow]:
-        windows = self._all_managed_windows()
+        windows = self._all_wechat_windows() if window_type == WindowTypeEnum.MenuWindow else self._all_managed_windows()
         wechat_titles = {"wechat", "weixin", "微信"}
         if window_type == WindowTypeEnum.MainWindow:
             return next((w for w in windows if w.title.lower() in wechat_titles), None)
@@ -275,16 +275,17 @@ class XFCEWindowManager:
         if window_type == WindowTypeEnum.RemoveMemberWindow:
             return next((w for w in windows if "移出群成员" in w.title or "删除成员" in w.title), None)
         if window_type == WindowTypeEnum.MenuWindow:
-            return next(
-                (
-                    w
-                    for w in windows
-                    if w.title.lower() in wechat_titles
-                    and w.width < max(600, self.size_config.width)
-                    and w.height < max(700, self.size_config.height)
-                ),
-                None,
-            )
+            candidates = [
+                w
+                for w in windows
+                if w.title.lower() in wechat_titles
+                and 80 <= w.width <= 600
+                and 100 <= w.height <= 800
+                and w.width < int(self.size_config.width) * 0.8
+                and w.height < int(self.size_config.height) * 0.8
+            ]
+            candidates.sort(key=lambda w: w.width * w.height, reverse=True)
+            return candidates[0] if candidates else None
         if window_type in (
             WindowTypeEnum.InviteConfirmWindow,
             WindowTypeEnum.InviteResonWindow,

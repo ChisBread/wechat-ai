@@ -56,6 +56,41 @@ class DummyOCRProcessor:
 
 
 class XFCEWindowManagerTest(unittest.TestCase):
+    def test_menu_window_search_includes_unmanaged_wechat_popup(self):
+        manager = XFCEWindowManager(image_processor=object(), ocr_processor=object())
+        manager.size_config.width = 1008
+        manager.size_config.height = 1820
+
+        def fake_run(*args):
+            if args == ("xprop", "-root", "_NET_CLIENT_LIST"):
+                return DummyCompletedProcess("0xa00013")
+            if args == ("xdotool", "getwindowname", "10485779"):
+                return DummyCompletedProcess("WeChat")
+            if args == ("xdotool", "getwindowname", "10485890"):
+                return DummyCompletedProcess("wechat")
+            if args[:3] == ("xdotool", "search", "--class"):
+                return DummyCompletedProcess("10485779\n10485890\n")
+            if args[:3] == ("xdotool", "search", "--name"):
+                return DummyCompletedProcess("")
+            return DummyCompletedProcess("")
+
+        def fake_geometry(wid):
+            if str(wid) == "10485779":
+                return {"x": 0, "y": 0, "width": 1008, "height": 1820}
+            if str(wid) == "10485890":
+                return {"x": 240, "y": 680, "width": 188, "height": 360}
+            return None
+
+        with (
+            patch("wechat_ai_bot.rpa.xfce_window_manager._run", side_effect=fake_run),
+            patch.object(manager, "_window_geometry", side_effect=fake_geometry),
+        ):
+            window = manager.get_window(WindowTypeEnum.MenuWindow)
+
+        self.assertIsNotNone(window)
+        self.assertEqual(window.id, "10485890")
+        self.assertEqual(window.title, "wechat")
+
     def test_confirm_window_search_includes_unmanaged_wechat_popup(self):
         manager = XFCEWindowManager(image_processor=object(), ocr_processor=object())
         manager.size_config.width = 1008
