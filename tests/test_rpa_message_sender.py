@@ -98,12 +98,27 @@ class MessageSenderMentionTest(unittest.TestCase):
         results = [
             {"pixel_bbox": [380, 35, 450, 51], "label": "@Bread1", "confidence": 0.99},
             {"pixel_bbox": [10, 410, 120, 438], "label": "Bread", "confidence": 0.99},
+            {"pixel_bbox": [18, 452, 72, 471], "label": "@Bread", "confidence": 0.99},
         ]
 
-        candidates = sender._mention_candidates("Bread", results, region_height=480)
+        candidates = sender._mention_candidates("Bread", results, region_width=600, region_height=480)
 
         self.assertEqual(len(candidates), 1)
         self.assertEqual(candidates[0]["pixel_bbox"], [10, 410, 120, 438])
+
+    def test_mention_candidates_match_real_probe_shape(self):
+        sender = MessageSender(DummyWindowManager())
+        results = [
+            {"pixel_bbox": [590, 21, 652, 39], "label": "@Bread2", "confidence": 0.99},
+            {"pixel_bbox": [590, 119, 652, 137], "label": "@Bread3", "confidence": 0.99},
+            {"pixel_bbox": [23, 185, 65, 200], "label": "Bread", "confidence": 0.99},
+            {"pixel_bbox": [18, 223, 72, 242], "label": "@Bread", "confidence": 0.99},
+        ]
+
+        candidates = sender._mention_candidates("Bread", results, region_width=736, region_height=270)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["pixel_bbox"], [23, 185, 65, 200])
 
 
 if __name__ == "__main__":

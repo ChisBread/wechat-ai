@@ -167,7 +167,12 @@ class MessageSender:
             return False
 
         results = ocr_processor.process_image(image=screenshot)
-        candidates = self._mention_candidates(mention_name, results, region_height=region[3])
+        candidates = self._mention_candidates(
+            mention_name,
+            results,
+            region_width=region[2],
+            region_height=region[3],
+        )
         if not candidates:
             return False
 
@@ -199,6 +204,7 @@ class MessageSender:
         self,
         mention_name: str,
         results: List[Dict],
+        region_width: int | None = None,
         region_height: int | None = None,
     ) -> List[Dict]:
         needle = mention_name.lower().replace(" ", "")
@@ -208,21 +214,25 @@ class MessageSender:
             compact = label.lower().replace(" ", "")
             if not compact:
                 continue
-            normalized = compact.lstrip("@")
-            if compact.startswith("@") and normalized != needle:
+            if compact.startswith("@"):
                 continue
+            normalized = compact
             similarity = ratio(needle, normalized, score_cutoff=0.6)
             if needle not in normalized and normalized not in needle and similarity < 0.6:
                 continue
             bbox = result.get("pixel_bbox", [0, 0, 0, 0])
+            x_center = (float(bbox[0]) + float(bbox[2])) / 2 if len(bbox) >= 4 else 0
             y_center = (float(bbox[1]) + float(bbox[3])) / 2 if len(bbox) >= 4 else 0
-            if region_height and y_center < float(region_height) * 0.3:
+            if region_width and x_center > float(region_width) * 0.65:
+                continue
+            if region_height and y_center < float(region_height) * 0.45:
                 continue
             exact_bonus = 1.0 if normalized == needle else 0.0
+            left_bonus = 0.1 if region_width and x_center < float(region_width) * 0.35 else 0
             lower_bonus = (y_center / float(region_height)) * 0.25 if region_height else 0
             item = dict(result)
             item["similarity"] = float(similarity)
-            item["mention_score"] = float(similarity) + exact_bonus + lower_bonus
+            item["mention_score"] = float(similarity) + exact_bonus + left_bonus + lower_bonus
             candidates.append(item)
         candidates.sort(
             key=lambda item: (
