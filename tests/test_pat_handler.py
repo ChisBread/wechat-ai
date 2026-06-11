@@ -111,6 +111,30 @@ class PatHandlerTest(unittest.TestCase):
         move.assert_called_once_with(305, 294)
         click.assert_called_once_with(305, 294, button="right")
 
+    def test_find_name_candidates_falls_back_to_raw_ocr_for_single_character(self):
+        handler = PatHandler.__new__(PatHandler)
+
+        class DummyOCR:
+            def find_text(self, image, target_text):
+                return []
+
+            def process_image(self, image):
+                return [
+                    {"label": "Bread", "pixel_bbox": [72.0, 211.0, 102.0, 221.0]},
+                    {"label": "懒", "pixel_bbox": [69.0, 800.0, 81.0, 814.0]},
+                ]
+
+            def _calculate_text_similarity(self, left, right):
+                return 1.0 if str(left).strip() == str(right).strip() else 0.0
+
+        handler.ocr_processor = DummyOCR()
+
+        matches = handler._find_name_candidates_for_pat(object(), "懒")
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["label"], "懒")
+        self.assertEqual(matches[0]["source"], "raw")
+
 
 if __name__ == "__main__":
     unittest.main()

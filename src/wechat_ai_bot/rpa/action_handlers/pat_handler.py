@@ -97,7 +97,7 @@ class PatHandler(WindowOperationsMixin, BaseActionHandler):
             left_avatars.sort(key=lambda item: item.get("pixel_bbox", [0, 0, 0, 0])[1], reverse=True)
             return left_avatars[0]
 
-        names = self.ocr_processor.find_text(image=screenshot, target_text=action.user_name)
+        names = self._find_name_candidates_for_pat(screenshot, action.user_name)
         self.logger.info("Pat OCR name matches for %r: %s", action.user_name, len(names))
         if not names:
             return None
@@ -112,3 +112,43 @@ class PatHandler(WindowOperationsMixin, BaseActionHandler):
                     best = avatar
                     best_delta = delta
         return best if best_delta < 60 else None
+
+    def _find_name_candidates_for_pat(self, screenshot, target_text: str):
+        target_text = str(target_text or "").strip()
+        if not target_text:
+            return []
+        matches = []
+        seen = set()
+
+        def add_results(results, source: str):
+            for result in results or []:
+                label = str(result.get("label") or "").strip()
+                bbox = result.get("pixel_bbox")
+                if not label or not bbox:
+                    continue
+                similarity = self._text_similarity(label, target_text)
+                if similarity < 0.8:
+                    continue
+                key = (label, tuple(int(float(v)) for v in bbox))
+                if key in seen:
+                    continue
+                seen.add(key)
+                item = dict(result)
+                item["similarity"] = similarity
+                item["source"] = source
+                matches.append(item)
+
+        add_results(
+            self.ocr_processor.find_text(image=screenshot, target_text=target_text),
+            "preprocessed",
+        )
+        add_results(self.ocr_processor.process_image(image=screenshot), "raw")
+        return matches
+
+    def _text_similarity(self, left: str, right: str) -> float:
+        calculate = getattr(self.ocr_processor, "_calculate_text_similarity", None)
+        if callable(calculate):
+            return float(calculate(left, right))
+        left = str(left or "").lower().strip()
+        right = str(right or "").lower().strip()
+        return 1.0 if left == right else 0.0
