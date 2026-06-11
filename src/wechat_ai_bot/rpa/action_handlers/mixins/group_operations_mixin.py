@@ -96,6 +96,14 @@ class GroupOperationsMixin:
         top = max(0, (height - region_height) // 2)
         return [left, top, region_width, region_height]
 
+    def _get_popup_action_region(self, region) -> list[int]:
+        return [
+            int(region[0]) + int(region[2]) // 2,
+            int(region[1]) + int(region[3]) // 2,
+            max(1, int(region[2]) // 2),
+            max(1, int(region[3]) // 2),
+        ]
+
     def _scroll_room_sidebar(self, clicks: int) -> None:
         region = self._get_room_side_bar_region()
         human_like_mouse_move(
@@ -132,7 +140,12 @@ class GroupOperationsMixin:
         time.sleep(self.controller.window_manager.action_delay)
         return True
 
-    def _click_confirm_button(self, region: Optional[Tuple[int, int, int, int]] = None) -> bool:
+    def _click_confirm_button(
+        self,
+        region: Optional[Tuple[int, int, int, int]] = None,
+        texts: Optional[Tuple[str, ...]] = None,
+        btn_types: Tuple[BtnType, ...] = (BtnType.GREEN,),
+    ) -> bool:
         if region is None:
             region = [
                 0,
@@ -140,23 +153,72 @@ class GroupOperationsMixin:
                 int(self.window_manager.size_config.width),
                 int(self.window_manager.size_config.height),
             ]
+        texts = texts or ("确定", "完成", "保存", "修改", "确认")
         button = self.ui_helper.find_and_click_text_candidate(
-            texts=("确定", "完成", "保存", "修改", "确认"),
+            texts=texts,
             region=region,
             fuzzy=76,
             save_path="/config/runtime_images/confirm_button_ocr.png",
         )
         if button:
             return True
-        button = self.ui_helper.find_btn_by_text(
-            text="",
-            btn_type=BtnType.GREEN,
-            region=region,
-        )
-        if button:
-            center = get_center_point(button)
-            human_like_mouse_move(center[0], center[1])
-            pyautogui.click()
-            time.sleep(self.controller.window_manager.action_delay)
-            return True
+        for btn_type in btn_types:
+            button = self.ui_helper.find_btn_by_text(
+                text="",
+                btn_type=btn_type,
+                region=region,
+                min_area=250,
+            )
+            if button:
+                center = get_center_point(button)
+                human_like_mouse_move(center[0], center[1])
+                pyautogui.click()
+                time.sleep(self.controller.window_manager.action_delay)
+                return True
         return False
+
+    def _confirm_invite_member(self, initial_region=None) -> bool:
+        clicked = False
+        if initial_region is not None:
+            clicked = self._click_confirm_button(
+                initial_region,
+                texts=("确定", "完成", "保存", "确认", "邀请"),
+                btn_types=(BtnType.GREEN,),
+            )
+        if clicked:
+            time.sleep(self.controller.window_manager.action_delay)
+        confirm = self.window_manager.wait_for_window(
+            WindowTypeEnum.InviteConfirmWindow,
+            timeout=5,
+        )
+        if confirm:
+            return self._click_confirm_button(
+                self.get_window_region(confirm),
+                texts=("确定", "完成", "保存", "确认", "邀请"),
+                btn_types=(BtnType.GREEN,),
+            )
+        return clicked
+
+    def _confirm_destructive_member_action(
+        self,
+        initial_region=None,
+        confirm_window_type: WindowTypeEnum = WindowTypeEnum.RoomInputConfirmBox,
+        timeout: float = 5,
+    ) -> bool:
+        clicked = False
+        if initial_region is not None:
+            clicked = self._click_confirm_button(
+                initial_region,
+                texts=("确定", "确认", "完成", "移出", "删除", "退出", "退出群聊"),
+                btn_types=(BtnType.RED, BtnType.GREEN),
+            )
+        if clicked:
+            time.sleep(self.controller.window_manager.action_delay)
+        confirm = self.window_manager.wait_for_window(confirm_window_type, timeout=timeout)
+        if confirm:
+            return self._click_confirm_button(
+                self.get_window_region(confirm),
+                texts=("确定", "确认", "完成", "移出", "删除", "退出", "退出群聊"),
+                btn_types=(BtnType.RED, BtnType.GREEN),
+            )
+        return clicked

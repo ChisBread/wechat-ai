@@ -152,6 +152,28 @@ class UIInteractionHelperTest(unittest.TestCase):
         move.assert_not_called()
         click.assert_not_called()
 
+    def test_find_btn_by_text_passes_custom_min_area(self):
+        helper = UIInteractionHelper(DummyController([]))
+
+        with patch.object(
+            helper,
+            "_find_areas_by_opencv",
+            return_value=([(7, 8)], [(5, 6, 25, 18)]),
+        ) as find:
+            bbox = helper.find_btn_by_text(
+                text="",
+                btn_type=ui_helper_module.BtnType.GREEN,
+                region=[100, 200, 300, 400],
+                min_area=250,
+            )
+
+        self.assertEqual(bbox, [105, 206, 125, 218])
+        find.assert_called_once_with(
+            region=[100, 200, 300, 400],
+            btn_type=ui_helper_module.BtnType.GREEN,
+            min_area=250,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

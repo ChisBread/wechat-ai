@@ -52,7 +52,11 @@ class UIInteractionHelper:
         self.logger = controller.logger.getChild(self.__class__.__name__)
 
     def find_btn_by_text(
-        self, text: str, btn_type: BtnType, region: Tuple[int, int, int, int]
+        self,
+        text: str,
+        btn_type: BtnType,
+        region: Tuple[int, int, int, int],
+        min_area: int = 500,
     ) -> Optional[Tuple[int, int, int, int]]:
         """
         根据文本查找主色调按钮。
@@ -64,7 +68,11 @@ class UIInteractionHelper:
         Returns:
             Optional[Tuple[int, int, int, int]]: 按钮区域。
         """
-        centers, bboxes = self._find_areas_by_opencv(region=region, btn_type=btn_type)
+        centers, bboxes = self._find_areas_by_opencv(
+            region=region,
+            btn_type=btn_type,
+            min_area=min_area,
+        )
         for center, bbox in zip(centers, bboxes):
             if text.strip() == "":
                 bbox = [

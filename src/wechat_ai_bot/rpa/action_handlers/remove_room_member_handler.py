@@ -88,4 +88,5 @@ class RemoveRoomMemberHandler(WindowOperationsMixin, GroupOperationsMixin, BaseA
         matches.sort(key=lambda item: item.get("pixel_bbox", [0, 0, 0, 0])[1], reverse=True)
         self.ui_helper.click_element(matches[0].get("pixel_bbox"))
         time.sleep(self.controller.window_manager.action_delay)
-        return self._click_confirm_button(region)
+        action_region = self._get_popup_action_region(region)
+        return self._confirm_destructive_member_action(action_region)

@@ -92,9 +92,5 @@ class Invite2RoomHandler(WindowOperationsMixin, GroupOperationsMixin, BaseAction
         matches.sort(key=lambda item: item.get("pixel_bbox", [0, 0, 0, 0])[1])
         self.ui_helper.click_element(matches[0].get("pixel_bbox"))
         time.sleep(self.controller.window_manager.action_delay)
-        if self._click_confirm_button(region):
-            return True
-        confirm = self.window_manager.wait_for_window(WindowTypeEnum.InviteConfirmWindow, timeout=5)
-        if confirm:
-            return self._click_confirm_button(self.get_window_region(confirm))
-        return False
+        action_region = self._get_popup_action_region(region)
+        return self._confirm_invite_member(action_region)

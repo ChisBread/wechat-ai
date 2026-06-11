@@ -9,10 +9,12 @@ from unittest.mock import patch
 
 class DummyBtnType(Enum):
     GREEN = "green"
+    RED = "red"
 
 
 class DummyWindowTypeEnum(Enum):
     RoomInputConfirmBox = "RoomInputConfirmBox"
+    InviteConfirmWindow = "InviteConfirmWindow"
 
 
 ui_helper = types.ModuleType("wechat_ai_bot.rpa.ui_helper")
@@ -167,6 +169,47 @@ class GroupOperationsMixinTest(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(helper.clicked_texts[0][0], ("确定", "完成", "保存", "修改", "确认"))
         self.assertEqual(helper.clicked_texts[0][1], [10, 20, 300, 180])
+
+    def test_invite_confirm_returns_false_without_click_or_followup_popup(self):
+        helper = DummyGroupOperations(text_candidate_success=False)
+
+        ok = helper._confirm_invite_member([10, 20, 300, 180])
+
+        self.assertFalse(ok)
+        self.assertEqual(helper.window_manager.waited[-1][0], DummyWindowTypeEnum.InviteConfirmWindow)
+
+    def test_invite_confirm_clicks_followup_popup_when_present(self):
+        helper = DummyGroupOperations(popup=object())
+
+        with patch.object(helper, "_click_confirm_button", side_effect=[True, True]) as click:
+            ok = helper._confirm_invite_member([10, 20, 300, 180])
+
+        self.assertTrue(ok)
+        self.assertEqual(click.call_args_list[0].args[0], [10, 20, 300, 180])
+        self.assertEqual(click.call_args_list[1].args[0], [10, 20, 300, 180])
+        self.assertEqual(helper.window_manager.waited[-1][0], DummyWindowTypeEnum.InviteConfirmWindow)
+
+    def test_destructive_confirm_waits_for_popup_without_initial_region(self):
+        helper = DummyGroupOperations(popup=object())
+
+        with patch.object(helper, "_click_confirm_button", return_value=True) as click:
+            ok = helper._confirm_destructive_member_action(initial_region=None)
+
+        self.assertTrue(ok)
+        click.assert_called_once_with(
+            [10, 20, 300, 180],
+            texts=("确定", "确认", "完成", "移出", "删除", "退出", "退出群聊"),
+            btn_types=(DummyBtnType.RED, DummyBtnType.GREEN),
+        )
+        self.assertEqual(helper.window_manager.waited[-1][0], DummyWindowTypeEnum.RoomInputConfirmBox)
+
+    def test_destructive_confirm_returns_false_without_click_or_popup(self):
+        helper = DummyGroupOperations(text_candidate_success=False)
+
+        ok = helper._confirm_destructive_member_action([10, 20, 300, 180])
+
+        self.assertFalse(ok)
+        self.assertEqual(helper.window_manager.waited[-1][0], DummyWindowTypeEnum.RoomInputConfirmBox)
 
 
 if __name__ == "__main__":
