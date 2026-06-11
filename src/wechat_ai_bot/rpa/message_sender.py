@@ -136,7 +136,6 @@ class MessageSender:
         if not self._click_mention_candidate(mention_name):
             self.logger.warning("未能确认 @ 候选: %s", mention_name)
             return False
-        pyautogui.press("space")
         time.sleep(0.3)
         return True
 
@@ -168,11 +167,17 @@ class MessageSender:
             return False
 
         results = ocr_processor.process_image(image=screenshot)
-        candidates = self._mention_candidates(mention_name, results)
+        candidates = self._mention_candidates(mention_name, results, region_height=region[3])
         if not candidates:
             return False
 
         best = candidates[0]
+        self.logger.info(
+            "Selecting @ candidate %r bbox=%s score=%.3f",
+            best.get("label"),
+            best.get("pixel_bbox"),
+            best.get("mention_score", 0),
+        )
         center_x, center_y = get_center_point(best["pixel_bbox"])
         pyautogui.click(region[0] + int(center_x), region[1] + int(center_y))
         return True
@@ -181,19 +186,21 @@ class MessageSender:
         try:
             _send_x, send_y = get_center_point(send_button)
             x = int(getattr(self.window_manager, "MSG_TOP_X", 0) or 0)
-            message_top = int(getattr(self.window_manager, "MSG_TOP_Y", 0) or 0)
-            message_height = int(getattr(self.window_manager, "MSG_HEIGHT", 0) or 0)
-            input_top = message_top + message_height if message_height > 0 else int(send_y) - 220
-            y = max(message_top, min(input_top - 240, int(send_y) - 260))
+            y = max(int(getattr(self.window_manager, "MSG_TOP_Y", 0) or 0), int(send_y) - 520)
             width = int(getattr(self.window_manager, "MSG_WIDTH", 0) or 0)
-            height = max(80, min(260, int(send_y) - y - 40))
+            height = max(80, int(send_y) - y - 40)
             if width <= 0 or height <= 0:
                 return None
             return [x, y, width, height]
         except Exception:
             return None
 
-    def _mention_candidates(self, mention_name: str, results: List[Dict]) -> List[Dict]:
+    def _mention_candidates(
+        self,
+        mention_name: str,
+        results: List[Dict],
+        region_height: int | None = None,
+    ) -> List[Dict]:
         needle = mention_name.lower().replace(" ", "")
         candidates = []
         for result in results or []:
@@ -201,14 +208,25 @@ class MessageSender:
             compact = label.lower().replace(" ", "")
             if not compact:
                 continue
-            similarity = ratio(needle, compact, score_cutoff=0.45)
-            if needle in compact or compact in needle or similarity >= 0.45:
-                item = dict(result)
-                item["similarity"] = float(similarity)
-                candidates.append(item)
+            normalized = compact.lstrip("@")
+            if compact.startswith("@") and normalized != needle:
+                continue
+            similarity = ratio(needle, normalized, score_cutoff=0.6)
+            if needle not in normalized and normalized not in needle and similarity < 0.6:
+                continue
+            bbox = result.get("pixel_bbox", [0, 0, 0, 0])
+            y_center = (float(bbox[1]) + float(bbox[3])) / 2 if len(bbox) >= 4 else 0
+            if region_height and y_center < float(region_height) * 0.3:
+                continue
+            exact_bonus = 1.0 if normalized == needle else 0.0
+            lower_bonus = (y_center / float(region_height)) * 0.25 if region_height else 0
+            item = dict(result)
+            item["similarity"] = float(similarity)
+            item["mention_score"] = float(similarity) + exact_bonus + lower_bonus
+            candidates.append(item)
         candidates.sort(
             key=lambda item: (
-                item.get("similarity", 0),
+                item.get("mention_score", 0),
                 float(item.get("pixel_bbox", [0, 0, 0, 0])[1]),
             ),
             reverse=True,

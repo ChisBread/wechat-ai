@@ -47,7 +47,7 @@ class DummyImageProcessor:
 class DummyOCRProcessor:
     def process_image(self, **_kwargs):
         return [
-            {"pixel_bbox": [10, 20, 120, 48], "label": "Bread", "confidence": 0.99}
+            {"pixel_bbox": [10, 400, 120, 428], "label": "Bread", "confidence": 0.99}
         ]
 
 
@@ -81,28 +81,29 @@ class MessageSenderMentionTest(unittest.TestCase):
             ok = sender.mention_user("@Bread extra")
 
         self.assertTrue(ok)
-        self.assertEqual(pressed, ["at", "space"])
+        self.assertEqual(pressed, ["at"])
         self.assertEqual(hotkeys, [("ctrl", "v")])
         self.assertEqual(clipboards, ["Bread"])
-        self.assertEqual(clicks, [(265, 494)])
+        self.assertEqual(clicks, [(265, 834)])
 
     def test_mention_candidate_region_stays_near_input_box(self):
         sender = MessageSender(DummyWindowManager())
 
         region = sender._mention_candidate_region([720, 920, 780, 960])
 
-        self.assertEqual(region, [200, 460, 600, 260])
+        self.assertEqual(region, [200, 420, 600, 480])
 
-    def test_mention_candidates_prefer_lower_popup_candidate(self):
+    def test_mention_candidates_ignore_unselected_message_text(self):
         sender = MessageSender(DummyWindowManager())
         results = [
-            {"pixel_bbox": [10, 20, 120, 48], "label": "Bread", "confidence": 0.99},
-            {"pixel_bbox": [10, 210, 120, 238], "label": "Bread", "confidence": 0.99},
+            {"pixel_bbox": [380, 35, 450, 51], "label": "@Bread1", "confidence": 0.99},
+            {"pixel_bbox": [10, 410, 120, 438], "label": "Bread", "confidence": 0.99},
         ]
 
-        candidates = sender._mention_candidates("Bread", results)
+        candidates = sender._mention_candidates("Bread", results, region_height=480)
 
-        self.assertEqual(candidates[0]["pixel_bbox"], [10, 210, 120, 238])
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["pixel_bbox"], [10, 410, 120, 438])
 
 
 if __name__ == "__main__":
