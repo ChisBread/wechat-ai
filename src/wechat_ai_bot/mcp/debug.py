@@ -721,6 +721,7 @@ def build_debug_status(
             "model_path": str(getattr(image_processor, "model_path", "")),
             "imgsz_config": getattr(visual_service, "yolo_imgsz", None),
             "imgsz_actual": getattr(visual_service, "_last_yolo_imgsz", None),
+            "last_detect_imgsz": getattr(image_processor, "last_yolo_imgsz", None),
             "stride": getattr(visual_service, "yolo_stride", None),
         },
         "database": _expand_database_status(database_service, db_report, show_sensitive=show_sensitive),

@@ -4,6 +4,7 @@
 """
 
 import logging
+import math
 import os
 from pathlib import Path
 import random
@@ -31,6 +32,8 @@ class ImageProcessor:
         self.model_path = get_model_path("msg_rec.pt")
         self.yolo: Optional[YOLO] = None
         self.box_color_dict = {}
+        self.yolo_stride = 32
+        self.last_yolo_imgsz = None
         self._init_color_config()
 
     def setup(self):
@@ -77,7 +80,44 @@ class ImageProcessor:
         """
         return (random.randint(0, 150), random.randint(0, 150), random.randint(0, 150))
 
-    def detect_objects(self, image: Image.Image, imgsz: int = 640) -> List[Dict]:
+    def resolve_yolo_imgsz(
+        self,
+        image: Image.Image,
+        imgsz: int | str | list[int] | tuple[int, int] = "auto",
+        stride: int | None = None,
+    ) -> int | list[int]:
+        stride = max(1, int(stride or self.yolo_stride or 32))
+        config = imgsz
+        if isinstance(config, str):
+            value = config.strip().lower()
+            if value == "auto":
+                return [
+                    self._ceil_to_stride(image.height, stride),
+                    self._ceil_to_stride(image.width, stride),
+                ]
+            if "," in value:
+                parts = [int(part.strip()) for part in value.split(",") if part.strip()]
+                if len(parts) == 2:
+                    return [
+                        self._ceil_to_stride(parts[0], stride),
+                        self._ceil_to_stride(parts[1], stride),
+                    ]
+            return self._ceil_to_stride(int(value), stride)
+        if isinstance(config, (list, tuple)) and len(config) == 2:
+            return [
+                self._ceil_to_stride(int(config[0]), stride),
+                self._ceil_to_stride(int(config[1]), stride),
+            ]
+        return self._ceil_to_stride(int(config or 960), stride)
+
+    def _ceil_to_stride(self, value: int, stride: int) -> int:
+        return max(stride, int(math.ceil(value / stride) * stride))
+
+    def detect_objects(
+        self,
+        image: Image.Image,
+        imgsz: int | str | list[int] | tuple[int, int] = "auto",
+    ) -> List[Dict]:
         """
         检测图像中的对象。
         Args:
@@ -89,8 +129,15 @@ class ImageProcessor:
             self.logger.error("YOLO 模型未加载")
             return []
         try:
-            self.logger.debug("YOLO input image size: %sx%s, imgsz=%s", image.width, image.height, imgsz)
-            results = self.yolo(image, imgsz=imgsz, verbose=False)
+            resolved_imgsz = self.resolve_yolo_imgsz(image, imgsz=imgsz)
+            self.last_yolo_imgsz = resolved_imgsz
+            self.logger.debug(
+                "YOLO input image size: %sx%s, imgsz=%s",
+                image.width,
+                image.height,
+                resolved_imgsz,
+            )
+            results = self.yolo(image, imgsz=resolved_imgsz, verbose=False)
             detections = []
             for result in results:
                 boxes = result.boxes

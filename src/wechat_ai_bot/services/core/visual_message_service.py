@@ -10,7 +10,6 @@ Architecture:
 
 import hashlib
 import logging
-import math
 import re
 import threading
 import time
@@ -603,41 +602,13 @@ class VisualMessageService:
         return hashlib.md5(normalized.encode("utf-8")).hexdigest()
 
     def _resolve_yolo_imgsz(self, image: Image.Image) -> int | list[int]:
-        config = self.yolo_imgsz
-        if isinstance(config, str):
-            value = config.strip().lower()
-            if value == "auto":
-                resolved = [
-                    self._ceil_to_stride(image.height, self.yolo_stride),
-                    self._ceil_to_stride(image.width, self.yolo_stride),
-                ]
-                self._last_yolo_imgsz = resolved
-                return resolved
-            if "," in value:
-                parts = [int(part.strip()) for part in value.split(",") if part.strip()]
-                if len(parts) == 2:
-                    resolved = [
-                        self._ceil_to_stride(parts[0], self.yolo_stride),
-                        self._ceil_to_stride(parts[1], self.yolo_stride),
-                    ]
-                    self._last_yolo_imgsz = resolved
-                    return resolved
-            resolved = self._ceil_to_stride(int(value), self.yolo_stride)
-            self._last_yolo_imgsz = resolved
-            return resolved
-        if isinstance(config, (list, tuple)) and len(config) == 2:
-            resolved = [
-                self._ceil_to_stride(int(config[0]), self.yolo_stride),
-                self._ceil_to_stride(int(config[1]), self.yolo_stride),
-            ]
-            self._last_yolo_imgsz = resolved
-            return resolved
-        resolved = self._ceil_to_stride(int(config or 960), self.yolo_stride)
+        resolved = self.image_processor.resolve_yolo_imgsz(
+            image,
+            imgsz=self.yolo_imgsz,
+            stride=self.yolo_stride,
+        )
         self._last_yolo_imgsz = resolved
         return resolved
-
-    def _ceil_to_stride(self, value: int, stride: int) -> int:
-        return max(stride, int(math.ceil(value / stride) * stride))
 
     def clear_dedup_cache(self):
         """Clear the deduplication cache (e.g., after switching chats)."""

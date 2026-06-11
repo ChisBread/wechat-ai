@@ -16,7 +16,15 @@ from wechat_ai_bot.services.core.visual_message_service import VisualMessageServ
 
 
 class DummyImageProcessor:
-    pass
+    def resolve_yolo_imgsz(self, image, imgsz="auto", stride=None):
+        stride = max(1, int(stride or 32))
+
+        def ceil(value):
+            return max(stride, ((int(value) + stride - 1) // stride) * stride)
+
+        if isinstance(imgsz, str) and imgsz == "auto":
+            return [ceil(image.height), ceil(image.width)]
+        return ceil(int(imgsz))
 
 
 class DummyOCRProcessor:
@@ -77,6 +85,7 @@ class VisualMessageServiceTest(unittest.TestCase):
         svc.yolo_imgsz = 961
 
         self.assertEqual(svc._resolve_yolo_imgsz(Image.new("RGB", (20, 20))), 992)
+
 
     def test_visual_message_factory_maps_metadata(self):
         factory = MessageFactoryService(DummyUserInfo())
