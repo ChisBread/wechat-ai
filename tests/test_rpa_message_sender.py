@@ -15,6 +15,7 @@ class DummyWindowManager:
     MSG_TOP_X = 200
     MSG_TOP_Y = 50
     MSG_WIDTH = 600
+    MSG_HEIGHT = 650
 
     def __init__(self):
         self.closed = False
@@ -80,10 +81,28 @@ class MessageSenderMentionTest(unittest.TestCase):
             ok = sender.mention_user("@Bread extra")
 
         self.assertTrue(ok)
-        self.assertEqual(pressed, ["at"])
+        self.assertEqual(pressed, ["at", "space"])
         self.assertEqual(hotkeys, [("ctrl", "v")])
         self.assertEqual(clipboards, ["Bread"])
-        self.assertEqual(clicks, [(265, 454)])
+        self.assertEqual(clicks, [(265, 494)])
+
+    def test_mention_candidate_region_stays_near_input_box(self):
+        sender = MessageSender(DummyWindowManager())
+
+        region = sender._mention_candidate_region([720, 920, 780, 960])
+
+        self.assertEqual(region, [200, 460, 600, 260])
+
+    def test_mention_candidates_prefer_lower_popup_candidate(self):
+        sender = MessageSender(DummyWindowManager())
+        results = [
+            {"pixel_bbox": [10, 20, 120, 48], "label": "Bread", "confidence": 0.99},
+            {"pixel_bbox": [10, 210, 120, 238], "label": "Bread", "confidence": 0.99},
+        ]
+
+        candidates = sender._mention_candidates("Bread", results)
+
+        self.assertEqual(candidates[0]["pixel_bbox"], [10, 210, 120, 238])
 
 
 if __name__ == "__main__":

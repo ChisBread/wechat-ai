@@ -136,6 +136,7 @@ class MessageSender:
         if not self._click_mention_candidate(mention_name):
             self.logger.warning("未能确认 @ 候选: %s", mention_name)
             return False
+        pyautogui.press("space")
         time.sleep(0.3)
         return True
 
@@ -180,9 +181,12 @@ class MessageSender:
         try:
             _send_x, send_y = get_center_point(send_button)
             x = int(getattr(self.window_manager, "MSG_TOP_X", 0) or 0)
-            y = max(int(getattr(self.window_manager, "MSG_TOP_Y", 0) or 0), int(send_y) - 520)
+            message_top = int(getattr(self.window_manager, "MSG_TOP_Y", 0) or 0)
+            message_height = int(getattr(self.window_manager, "MSG_HEIGHT", 0) or 0)
+            input_top = message_top + message_height if message_height > 0 else int(send_y) - 220
+            y = max(message_top, min(input_top - 240, int(send_y) - 260))
             width = int(getattr(self.window_manager, "MSG_WIDTH", 0) or 0)
-            height = max(80, int(send_y) - y - 40)
+            height = max(80, min(260, int(send_y) - y - 40))
             if width <= 0 or height <= 0:
                 return None
             return [x, y, width, height]
@@ -205,7 +209,7 @@ class MessageSender:
         candidates.sort(
             key=lambda item: (
                 item.get("similarity", 0),
-                -float(item.get("pixel_bbox", [0, 999999])[1]),
+                float(item.get("pixel_bbox", [0, 0, 0, 0])[1]),
             ),
             reverse=True,
         )
