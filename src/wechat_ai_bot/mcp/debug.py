@@ -1250,6 +1250,12 @@ def _base64_media_path_candidates(raw_path: str) -> list[str]:
 
 
 def _add_media_base64_from_path(database_service: Any, payload: dict[str, Any], resolved: Path) -> bool:
+    max_bytes = 5 * 1024 * 1024
+    try:
+        if resolved.stat().st_size > max_bytes:
+            return False
+    except OSError:
+        return False
     try:
         dat_info = parse_dat_file(resolved)
     except WeChatDatError:
