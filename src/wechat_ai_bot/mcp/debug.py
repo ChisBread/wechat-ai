@@ -386,7 +386,7 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         try:
             raw_rows = database_service.get_messages_by_username(contact.username, count=limit)
             messages = [
-                _factory_message_payload(factory_service, table_name, row)
+                _factory_message_payload(database_service, factory_service, table_name, row)
                 for table_name, row in _rows_with_table(database_service, contact.username, raw_rows)
             ]
         except Exception as exc:
@@ -1069,7 +1069,7 @@ def _rich_message_payload(
         payload["text"] = f"[{payload['type_name']}]"
         return payload
     table_name = f"Msg_{hashlib.md5(str(getattr(contact, 'username', '') or '').encode()).hexdigest()}"
-    media_payload = _factory_message_payload(factory_service, table_name, row)
+    media_payload = _factory_message_payload(database_service, factory_service, table_name, row)
     payload.update(media_payload)
     if not payload.get("text"):
         payload["text"] = media_payload.get("raw_content") or media_payload.get("factory_error") or f"[{payload['type_name']}]"
@@ -1082,7 +1082,7 @@ def _rows_with_table(database_service: Any, username: str, rows: list[tuple]) ->
     return [(table_name, row) for row in rows]
 
 
-def _factory_message_payload(factory_service: Any, table_name: str, row: tuple) -> dict[str, Any]:
+def _factory_message_payload(database_service: Any, factory_service: Any, table_name: str, row: tuple) -> dict[str, Any]:
     local_type = row[2] if len(row) > 2 else None
     payload: dict[str, Any] = {
         "local_id": row[0] if len(row) > 0 else None,
@@ -1204,6 +1204,7 @@ def _factory_message_payload(factory_service: Any, table_name: str, row: tuple) 
                 continue
             payload[key] = str(value) if isinstance(value, Path) else value
     _add_media_urls(payload)
+    add_media_base64(database_service, payload)
     return payload
 
 
@@ -1224,6 +1225,63 @@ def _add_media_urls(payload: dict[str, Any]) -> None:
     size_value = payload.get("file_size")
     if size_value not in (None, ""):
         payload["file_size_label"] = _format_file_size(size_value)
+
+
+def add_media_base64(database_service: Any, payload: dict[str, Any]) -> None:
+    for key in ("path", "thumb_path", "cover_path"):
+        raw_path = str(payload.get(key) or "")
+        if not raw_path:
+            continue
+        for candidate_path in _base64_media_path_candidates(raw_path):
+            resolved = _resolve_dashboard_media_path(database_service, candidate_path)
+            if not resolved:
+                continue
+            if _add_media_base64_from_path(database_service, payload, resolved):
+                return
+
+
+def _base64_media_path_candidates(raw_path: str) -> list[str]:
+    path = Path(raw_path)
+    candidates: list[str] = []
+    if path.name.endswith("_t.dat"):
+        candidates.append(str(path.with_name(f"{path.name[:-6]}.dat")))
+    candidates.append(raw_path)
+    return candidates
+
+
+def _add_media_base64_from_path(database_service: Any, payload: dict[str, Any], resolved: Path) -> bool:
+    try:
+        dat_info = parse_dat_file(resolved)
+    except WeChatDatError:
+        return False
+    if dat_info is not None:
+        user_info = getattr(database_service, "user_info", None)
+        dat_key = str(getattr(user_info, "dat_key", "") or "").strip()
+        dat_xor_key = getattr(user_info, "dat_xor_key", -1)
+        result = None
+        try:
+            result = decrypt_dat_file(resolved, aes_key=dat_key, xor_key=dat_xor_key)
+        except WeChatDatError:
+            inferred_xor_key = _infer_dat_xor_key(resolved, dat_info)
+            if inferred_xor_key is not None and inferred_xor_key != dat_xor_key:
+                try:
+                    result = decrypt_dat_file(resolved, aes_key=dat_key, xor_key=inferred_xor_key)
+                except WeChatDatError:
+                    result = None
+        if not result or not (result.media_type.startswith("image/") or result.media_type.startswith("video/")):
+            return False
+        payload["base64"] = base64.b64encode(result.data).decode("ascii")
+        payload["base64_mime_type"] = result.media_type
+        return True
+    media_type = _guess_file_media_type(resolved)
+    if not (media_type.startswith("image/") or media_type.startswith("video/")):
+        return False
+    try:
+        payload["base64"] = base64.b64encode(resolved.read_bytes()).decode("ascii")
+    except OSError:
+        return False
+    payload["base64_mime_type"] = media_type
+    return True
 
 
 def _media_url(path_or_url: str) -> str:
