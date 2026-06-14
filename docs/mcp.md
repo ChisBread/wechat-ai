@@ -131,8 +131,8 @@ OpenClaw 或类似支持 MCP JSON 配置的客户端可使用 Streamable HTTP：
 | --- | --- |
 | `query_wechat_msg` | 按联系人、关键词、时间范围查询文本历史 |
 | `search_text_messages` | 结构化查询文本历史，返回联系人、时间和消息列表 |
-| `get_recent_messages` | 获取最近消息；`parse_media=true` 时尝试解析媒体路径 |
-| `get_recent_media_messages` | 获取最近图片、视频、文件等非文本消息，并尽量返回本地路径 |
+| `get_recent_messages` | 获取最近消息；`parse_media=true` 时尝试解析媒体路径，图片/视频会尽量返回 base64 |
+| `get_recent_media_messages` | 获取最近图片、视频、文件等非文本消息，并尽量返回本地路径；图片/视频会尽量返回 base64 |
 | `get_chat_summary_context` | 返回适合 LLM 上下文窗口的紧凑聊天行 |
 
 ### 已移植写操作
@@ -188,7 +188,7 @@ MCP 工具参数一律使用 `snake_case`，不要把 Web API、RPA action 或�
 | `get_contact_detail` | `contact_name: str` | 返回联系人/群聊详情；群聊会尽量返回成员数量。 |
 | `get_recent_chats` | `limit: int = 20` | `limit` 范围 `1-100`。 |
 | `query_room_member_list` | `room_name: str` | 从数据库读取群成员列表，常用于群聊 @、拍一拍、移除成员前确认成员名。 |
-| `get_recent_messages` | `contact_name: str`，`limit: int = 30`，`include_non_text: bool = true`，`parse_media: bool = false` | `limit` 范围 `1-200`；`parse_media=true` 时解析图片、视频、文件路径。 |
+| `get_recent_messages` | `contact_name: str`，`limit: int = 30`，`include_non_text: bool = true`，`parse_media: bool = false` | `limit` 范围 `1-200`；`parse_media=true` 时解析图片、视频、文件路径，图片/视频会尽量返回 `base64` 和 `base64_mime_type`。 |
 | `search_text_messages` | `contact_name: str`，`query: str \| null = null`，`start_timestamp: int \| null = null`，`end_timestamp: int \| null = null`，`limit: int = 100` | 时间戳为 Unix 秒；`limit` 范围 `1-500`。 |
 | `get_recent_media_messages` | `contact_name: str`，`limit: int = 20` | 只返回最近非文本消息，`limit` 范围 `1-100`。 |
 | `get_chat_summary_context` | `contact_name: str`，`limit: int = 40` | 返回适合放进 LLM 上下文的紧凑文本，`limit` 范围 `1-120`。 |
@@ -275,7 +275,7 @@ MCP 本身面向可信 Agent 客户端。把 `8100` 端口暴露到其他机器�
 
 ## 媒体与图片 DAT
 
-`get_recent_messages(parse_media=true)` 和 `get_recent_media_messages` 会尽量返回图片、视频、文件的本地路径。Dashboard 的 `/dashboard/media?path=...` 只代理允许目录内的本地文件。
+`get_recent_messages(parse_media=true)` 和 `get_recent_media_messages` 会尽量返回图片、视频、文件的本地路径；图片/视频会尽量额外返回 `base64` 和 `base64_mime_type`。Dashboard 的 `/dashboard/media?path=...` 只代理允许目录内的本地文件。
 
 Linux 微信 4.x 图片通常是加密 `.dat`：
 

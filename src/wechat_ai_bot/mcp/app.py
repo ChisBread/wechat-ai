@@ -21,7 +21,7 @@ from typing import Any, Callable, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
 from wechat_ai_bot.clients.mqtt_client import MQTTClient
-from wechat_ai_bot.mcp.debug import build_debug_status, register_debug_routes
+from wechat_ai_bot.mcp.debug import add_media_base64, build_debug_status, register_debug_routes
 from wechat_ai_bot.mcp.dispatchers import (
     MqttCommandDispatcher,
     QueueCommandDispatcher,
@@ -583,6 +583,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             if isinstance(value, (bytes, bytearray)):
                 continue
             payload[key] = str(value) if isinstance(value, Path) else value
+        add_media_base64(db, payload)
         return payload
 
     def _window_status_payload(window_manager: Any) -> dict[str, Any]:

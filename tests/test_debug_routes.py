@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from wechat_ai_bot.mcp.debug import _dashboard_html, build_layout_png, mask_value, redact_text, tail_file
+from wechat_ai_bot.mcp.debug import _dashboard_html, add_media_base64, build_layout_png, mask_value, redact_text, tail_file
 from wechat_ai_bot.mcp.app import create_app
 from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.utils import size_config
@@ -714,17 +714,82 @@ class DebugRoutesTest(unittest.TestCase):
             recent = client.get("/dashboard/api/messages/recent?username=media", headers=headers)
             payload = recent.json()["messages"][0]
             media = client.get(payload["thumb_path_url"], headers=headers)
+            mcp_payload = json.loads(
+                app._tool_manager._tools["get_recent_messages"].fn(None, "media", 5, True, True)
+            )["messages"][0]
+            mcp_media_payload = json.loads(
+                app._tool_manager._tools["get_recent_media_messages"].fn(None, "media", 5)
+            )["messages"][0]
+            expected_base64 = base64.b64encode(png).decode("ascii")
 
             self.assertEqual(recent.status_code, 200)
             self.assertEqual(payload["type_name"], "图片")
             self.assertEqual(payload["path_url"], "/dashboard/media?path=msg/attach/alice/2026-06/Img/image.dat")
             self.assertEqual(payload["thumb_path_url"], "/dashboard/media?path=msg/attach/alice/2026-06/Img/image_t.dat")
+            self.assertEqual(payload["base64"], expected_base64)
+            self.assertEqual(payload["base64_mime_type"], "image/png")
+            self.assertEqual(mcp_payload["base64"], expected_base64)
+            self.assertEqual(mcp_payload["base64_mime_type"], "image/png")
+            self.assertEqual(mcp_media_payload["base64"], expected_base64)
+            self.assertEqual(mcp_media_payload["base64_mime_type"], "image/png")
             self.assertEqual(payload["thumb_url"], "https://example.test/thumb.gif")
             self.assertEqual(payload["file_size_label"], "2.00 KB")
             self.assertEqual(payload["sender_avatar_url"], "https://example.test/alice-small.jpg")
             self.assertEqual(media.status_code, 200)
             self.assertEqual(media.headers["content-type"], "image/png")
             self.assertEqual(media.content, png)
+
+    def test_add_media_base64_falls_back_to_thumb_path(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            png = (
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+                b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+                b"\x00\x00\x00\rIDATx\x9cc\xf8\xff\xff?\x00\x05\xfe"
+                b"\x02\xfe\xa7\x35\x81\x84\x00\x00\x00\x00IEND\xaeB`\x82"
+            )
+            image_dir = root / "msg" / "attach" / "alice" / "2026-06" / "Img"
+            image_dir.mkdir(parents=True)
+            (image_dir / "image_t.dat").write_bytes(png)
+            database_service = DummyDatabaseService(root=root)
+            payload = {
+                "type": 3,
+                "type_name": "图片",
+                "path": "",
+                "thumb_path": "msg/attach/alice/2026-06/Img/image_t.dat",
+            }
+
+            add_media_base64(database_service, payload)
+
+        self.assertEqual(payload["base64"], base64.b64encode(png).decode("ascii"))
+        self.assertEqual(payload["base64_mime_type"], "image/png")
+
+    def test_add_media_base64_prefers_full_image_for_thumb_dat_path(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            full_png = LONG_PNG_BYTES
+            thumb_png = (
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01"
+                b"\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+                b"\x00\x00\x00\rIDATx\x9cc\xf8\xff\xff?\x00\x05\xfe"
+                b"\x02\xfe\xa7\x35\x81\x84\x00\x00\x00\x00IEND\xaeB`\x82"
+            )
+            image_dir = root / "msg" / "attach" / "alice" / "2026-06" / "Img"
+            image_dir.mkdir(parents=True)
+            (image_dir / "image.dat").write_bytes(full_png)
+            (image_dir / "image_t.dat").write_bytes(thumb_png)
+            database_service = DummyDatabaseService(root=root)
+            payload = {
+                "type": 3,
+                "type_name": "图片",
+                "path": "",
+                "thumb_path": "msg/attach/alice/2026-06/Img/image_t.dat",
+            }
+
+            add_media_base64(database_service, payload)
+
+        self.assertEqual(payload["base64"], base64.b64encode(full_png).decode("ascii"))
+        self.assertEqual(payload["base64_mime_type"], "image/png")
 
     def test_dashboard_media_dat_requires_aes_key(self):
         from starlette.testclient import TestClient
