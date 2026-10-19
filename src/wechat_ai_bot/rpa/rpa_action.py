@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from queue import Queue
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 
 class RPAActionType(Enum):
@@ -52,6 +52,10 @@ class RPAAction:
         repr=False,
         compare=False,
         kw_only=True,
+    )
+
+    on_complete: Callable[[], None] | None = field(
+        default=None, repr=False, compare=False, kw_only=True,
     )
 
     def to_dict(self) -> Dict[str, Any]:

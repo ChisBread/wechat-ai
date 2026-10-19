@@ -11,7 +11,9 @@ import hmac
 import json
 import logging
 import os
+import tempfile
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
@@ -28,6 +30,7 @@ from wechat_ai_bot.mcp.dispatchers import (
     QueueCommandDispatcher,
     UnavailableCommandDispatcher,
 )
+from wechat_ai_bot.mcp.image_upload import decode_image_upload
 from wechat_ai_bot.mcp.protocols import CommandDispatcher
 from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.rpa.rpa_action import RPAActionType
@@ -202,6 +205,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         You are a WeChat assistant powered by WeChat-AI Bot (Linux).
         - Query contacts and message history through read-only Linux WeChat SQLCipher DB access.
         - Send text, files, pat messages, and supported group actions via the local RPA queue only when WECHAT_AI_MCP_WRITE_ENABLED=true.
+        - Use send_image_msg to upload base64 images (PNG/JPEG/WebP/GIF, up to 10 MiB) and send via the local file RPA action.
         - Admin tools that mutate local runtime state require WECHAT_AI_MCP_ADMIN_ENABLED=true.
         - Use dry_run=true before sending or changing group state when the tool supports it.
         - High-impact group operations require explicit human confirmation.
@@ -351,6 +355,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         dry_run: bool,
         wait_seconds: Optional[float],
         extra: Optional[dict[str, Any]] = None,
+        on_complete: Optional[Callable[[], None]] = None,
+        on_queued: Optional[Callable[[], None]] = None,
     ) -> str:
         action_type_value = action_type.value if isinstance(action_type, RPAActionType) else str(action_type)
         response: dict[str, Any] = {
@@ -367,12 +373,22 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             return _mcp_write_blocked(tool_name)
         app_context = _get_app_context_from_request(ctx)
         wait_timeout = _bounded_float(wait_seconds, 12, 0, 60)
+        lifecycle = {}
+        if on_complete is not None:
+            if not isinstance(app_context.command_dispatcher, QueueCommandDispatcher):
+                response.update(
+                    status="unavailable", queued=False, completed=False,
+                    message="Uploaded images require the local RPA queue dispatcher",
+                )
+                return _json(response)
+            lifecycle = {"on_complete": on_complete, "on_queued": on_queued}
         dispatch_rpa_wait = getattr(app_context.command_dispatcher, "dispatch_rpa_wait", None)
         if callable(dispatch_rpa_wait):
             dispatch_result = dispatch_rpa_wait(
                 action_type_value,
                 action_data,
                 timeout=wait_timeout,
+                **lifecycle,
             )
         else:
             message = app_context.command_dispatcher.dispatch_rpa(action_type_value, action_data)
@@ -1266,6 +1282,85 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 "file_path": str(path.resolve()),
             },
         )
+
+    @mcp.tool()
+    @handle_tool_exceptions
+    def send_image_msg(
+        ctx: Context,
+        recipient_name: str,
+        image_base64: str,
+        mime_type: Optional[str] = "image/png",
+        file_name: Optional[str] = None,
+        dry_run: bool = False,
+        wait_seconds: Optional[float] = 12,
+    ) -> str:
+        """Send uploaded image bytes to a contact/group via the existing file RPA action.
+
+        Accepts strict base64 or an image data URI, up to 10 MiB decoded.
+        PNG/JPEG/WebP/GIF signatures override MIME and filename extension hints.
+        dry_run validates without writing files or queueing. A timeout does not
+        cancel the send: the worker retains the file until execution finishes.
+        """
+        if not str(recipient_name or "").strip():
+            return _json({"status": "invalid_request", "message": "recipient_name is required"})
+        if not dry_run and not _mcp_write_enabled():
+            return _mcp_write_blocked("send_image_msg")
+        try:
+            data, image = decode_image_upload(image_base64, file_name)
+        except ValueError as exc:
+            return _json({"status": "invalid_request", "message": str(exc)})
+        resolved = _resolve_rpa_target(recipient_name)
+        extra = {
+            "recipient_name": recipient_name,
+            "resolved": resolved,
+            "image": image,
+            "dry_run": dry_run,
+            "queued": False,
+            "completed": False,
+            "result": None,
+            "wait_seconds": _bounded_float(wait_seconds, 12, 0, 60),
+        }
+        action_data = {"target": resolved["target"], "is_chatroom": bool(resolved["is_chatroom"])}
+        if dry_run:
+            return _dispatch_rpa_tool(
+                ctx, tool_name="send_image_msg",
+                action_type=RPAActionType.SEND_FILE.value, action_data=action_data,
+                dry_run=True, wait_seconds=wait_seconds, extra=extra,
+            )
+        directory = None
+        transferred = False
+
+        def mark_queued() -> None:
+            nonlocal transferred
+            transferred = True
+
+        try:
+            directory = tempfile.TemporaryDirectory(prefix="wechat_ai_send_images_")
+            path = Path(directory.name) / (uuid.uuid4().hex + Path(image["file_name"]).suffix)
+            # The desktop WeChat process runs as a different user from the bot.
+            # It must be able to traverse the directory and read the pasted file.
+            Path(directory.name).chmod(0o755)
+            with path.open("xb") as stream:
+                stream.write(data)
+            path.chmod(0o644)
+            action_data["file_path"] = str(path)
+            return _dispatch_rpa_tool(
+                ctx, tool_name="send_image_msg",
+                action_type=RPAActionType.SEND_FILE.value, action_data=action_data,
+                dry_run=False, wait_seconds=wait_seconds, extra=extra,
+                on_complete=directory.cleanup, on_queued=mark_queued,
+            )
+        except Exception:
+            logger.exception("Image upload dispatch failed")
+            return _json({
+                **extra, "status": "error", "queued": transferred,
+                "message": "Unable to stage or dispatch the uploaded image",
+            })
+        finally:
+            # Once enqueued the worker owns cleanup, including timeout/zero-wait
+            # responses. Removing the file here would race the RPA file reader.
+            if directory is not None and not transferred:
+                directory.cleanup()
 
     @mcp.tool()
     @handle_tool_exceptions

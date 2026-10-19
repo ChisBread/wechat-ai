@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from queue import Empty, Queue
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Callable, Dict
 
 from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.rpa.rpa_action import RPAActionType
@@ -47,16 +47,32 @@ class QueueCommandDispatcher:
         action_type: str,
         action_data: Dict[str, Any],
         timeout: float = 0,
+        *,
+        on_complete: Callable[[], None] | None = None,
+        on_queued: Callable[[], None] | None = None,
     ) -> Dict[str, Any]:
-        """Dispatch a direct RPA action and optionally wait for local execution status."""
-        action = self._rpa_action(action_type, action_data)
-        return self._dispatch_action_wait(action, timeout)
+        """Dispatch and optionally wait; callbacks transfer and release local resources.
 
-    def _dispatch_action_wait(self, action: Any, timeout: float = 0) -> Dict[str, Any]:
+        on_queued runs after queue insertion, even when no result is awaited.
+        on_complete runs in the worker's finally block before publishing its result.
+        """
+        action = self._rpa_action(action_type, action_data)
+        return self._dispatch_action_wait(
+            action, timeout, on_complete=on_complete, on_queued=on_queued,
+        )
+
+    def _dispatch_action_wait(
+        self, action: Any, timeout: float = 0, *,
+        on_complete: Callable[[], None] | None = None,
+        on_queued: Callable[[], None] | None = None,
+    ) -> Dict[str, Any]:
         result_queue = Queue(maxsize=1) if timeout and timeout > 0 else None
         if result_queue is not None and hasattr(action, "result_queue"):
             action.result_queue = result_queue
+        action.on_complete = on_complete
         self._queue_action(action)
+        if on_queued is not None:
+            on_queued()
         response: Dict[str, Any] = {
             "status": "queued",
             "queued": True,
