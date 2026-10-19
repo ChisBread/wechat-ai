@@ -11,7 +11,7 @@ from typing import Any, List, Optional, Union
 import xmltodict
 from wechat_ai_bot.models import UserInfo
 
-from .message_content import message_content_text
+from .message_content import chat_message_text, message_content_text
 
 
 class DownloadStatus:
@@ -190,19 +190,14 @@ class Message:
                 self.room != None
                 and self.contact is not None
                 and isinstance(message_content, str)
-                and not self.is_self
                 and self.local_type != MessageType.Pat
                 and self.local_type != MessageType.System
             ):
-                # TODO 群聊文字消息格式：<wxid>:<content>, 开头必须是发送人的id+'：'+换行
-                if message_content and message_content.startswith(
-                    self.contact.username
-                ):
-                    message_content = (
-                        message_content.strip(f"{self.contact.username}:")
-                        .strip("\u2005")
-                        .strip()
-                    )
+                message_content = chat_message_text(
+                    message_content,
+                    chat_username=self.room.username,
+                    sender_username=self.contact.username,
+                )
             self._parsed_content = message_content
         return self._parsed_content
 

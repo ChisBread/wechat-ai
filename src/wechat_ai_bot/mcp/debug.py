@@ -29,7 +29,7 @@ from wechat_ai_bot.services.core.wechat_dat import (
     infer_xor_key,
     parse_dat_file,
 )
-from wechat_ai_bot.weixin.message_content import message_content_text
+from wechat_ai_bot.weixin.message_content import chat_message_text, contact_in_chat
 from wechat_ai_bot.services.core.wechat_dat_key_discovery import derive_dat_key_for_file
 
 
@@ -318,7 +318,7 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
                 "contact": _contact_payload(contact),
                 "count": len(messages),
                 "messages": [
-                    _text_message_payload(database_service, row)
+                    _text_message_payload(database_service, row, chat_username=contact.username)
                     for row in messages
                 ],
             }
@@ -956,7 +956,7 @@ def _contact_payload(contact: Any) -> dict[str, Any]:
     }
 
 
-def _text_message_payload(database_service: Any, row: tuple) -> dict[str, Any]:
+def _text_message_payload(database_service: Any, row: tuple, *, chat_username: str = "") -> dict[str, Any]:
     content = row[0] if len(row) > 0 else ""
     sender_username = row[1] if len(row) > 1 else ""
     db_path = row[2] if len(row) > 2 else ""
@@ -967,11 +967,11 @@ def _text_message_payload(database_service: Any, row: tuple) -> dict[str, Any]:
     db_path = str(db_path or "")
     sender = None
     try:
-        sender = database_service.get_contact_by_username(sender_username)
+        sender = contact_in_chat(database_service, database_service.get_contact_by_username(sender_username), chat_username)
     except Exception:
         pass
     return {
-        "text": _message_content_text(content, ct_flag, 4000),
+        "text": _message_content_text(content, ct_flag, 4000, chat_username=chat_username, sender_username=sender_username),
         "sender_username": sender_username or "",
         "sender_display": getattr(sender, "display_name", "") if sender else sender_username or "",
         "db_path": db_path,
@@ -1026,6 +1026,8 @@ def _rich_message_payload(
         sender = database_service.get_contact_by_sender_id(sender_id, db_path)
     except Exception:
         sender = None
+    chat_username = getattr(contact, "username", "")
+    sender = contact_in_chat(database_service, sender, chat_username)
     sender_payload = _contact_payload(sender) if sender else {}
     upload_status = row[7] if len(row) > 7 else None
     current_account = getattr(getattr(database_service, "user_info", None), "account", "")
@@ -1063,6 +1065,8 @@ def _rich_message_payload(
             row[12] if len(row) > 12 else "",
             row[15] if len(row) > 15 else None,
             4000,
+            chat_username=chat_username,
+            sender_username=sender_payload.get("username", ""),
         )
         return payload
     if not parse_media:
@@ -1621,8 +1625,8 @@ def _message_text(message: Any) -> str:
     return _truncate_text(str(text or ""), 1200)
 
 
-def _message_content_text(value: Any, ct_flag: Any, limit: int) -> str:
-    return _truncate_text(message_content_text(value, ct_flag), limit)
+def _message_content_text(value: Any, ct_flag: Any, limit: int, *, chat_username: str = "", sender_username: str = "") -> str:
+    return _truncate_text(chat_message_text(value, ct_flag, chat_username=chat_username, sender_username=sender_username), limit)
 
 
 def _message_type_name(local_type: Any) -> str:

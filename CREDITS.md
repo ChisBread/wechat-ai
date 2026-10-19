@@ -41,6 +41,10 @@ for this integration work:
 - WeChatMsg: https://github.com/LC044/WeChatMsg
 - wechat-dump: https://github.com/ppwwyyxx/wechat-dump
 - WxDatDecrypt: https://github.com/recarto404/WxDatDecrypt
+- wechatauto-replica: https://github.com/fanyuantaier/wechatauto-replica
+  (Apache-2.0), a research reference for newer WCDB raw-key obfuscation.
+  This project's Linux scanner recovers the repeating XOR pad from the database
+  salt and verifies candidates using the page HMAC, without fixed binary offsets.
 
 ## Runtime Dependencies
 

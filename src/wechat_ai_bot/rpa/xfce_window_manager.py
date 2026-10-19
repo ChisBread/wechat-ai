@@ -183,6 +183,10 @@ class XFCEWindowManager:
                 if not geom:
                     continue
                 name = _run("xdotool", "getwindowname", wid).stdout.strip()
+                # WeChatAppEx browser windows can have the same title and size
+                # as the chat window. Never send keystrokes to a known helper.
+                if self._is_main_process_window(wid) is False:
+                    continue
                 area = geom["width"] * geom["height"]
                 candidates.append((area, wid, geom, name, wid in managed_ids))
 
@@ -213,6 +217,17 @@ class XFCEWindowManager:
                 managed,
             )
         return wid
+
+    def _is_main_process_window(self, wid: str) -> Optional[bool]:
+        try:
+            result = _run("xdotool", "getwindowpid", wid)
+            pid = result.stdout.strip()
+            if result.returncode != 0 or not pid.isdigit():
+                return None
+            executable = Path(f"/proc/{pid}/exe").resolve(strict=True).name.lower()
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            return None
+        return executable in {"wechat", "weixin"}
 
     def _all_managed_windows(self) -> list[XdotoolWindow]:
         windows: list[XdotoolWindow] = []
