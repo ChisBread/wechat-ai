@@ -202,16 +202,18 @@ class ChatRoom:
         通过解析ext_buffer中的protobuf数据，提取所有成员的wxID。
         结果缓存至实例属性，避免重复解析。
         """
-        if not hasattr(self, "_parsed_member_list"):
-            ext_buffer = self.ext_buffer
-            if isinstance(ext_buffer, bytes):
-                parsechatroom = ChatRoomData()
-                parsechatroom.ParseFromString(ext_buffer)
-                self._parsed_member_list = [
-                    member.wxID for member in parsechatroom.members
-                ]
+        return list(self.member_display_names)
 
-        return self._parsed_member_list
+    @property
+    def member_display_names(self) -> Dict[str, str]:
+        if not hasattr(self, "_member_display_names"):
+            data = ChatRoomData()
+            if self.ext_buffer:
+                data.ParseFromString(bytes(self.ext_buffer))
+            self._member_display_names = {
+                member.wxID: member.displayName for member in data.members
+            }
+        return self._member_display_names
 
 
 @dataclass

@@ -30,7 +30,7 @@ from wechat_ai_bot.mcp.dispatchers import (
 from wechat_ai_bot.mcp.protocols import CommandDispatcher
 from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.rpa.rpa_action import RPAActionType
-from wechat_ai_bot.weixin.message_content import message_content_text
+from wechat_ai_bot.weixin.message_content import chat_message_text, contact_in_chat
 from wechat_ai_bot.weixin.message_classes import MessageType
 
 logger = logging.getLogger(__name__)
@@ -488,8 +488,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             return text
         return text[: max(0, limit - 3)] + "..."
 
-    def _message_content_text(value: Any, ct_flag: Any, limit: int) -> str:
-        return _truncate_text(message_content_text(value, ct_flag), limit)
+    def _message_content_text(value: Any, ct_flag: Any, limit: int, *, chat_username: str = "", sender_username: str = "") -> str:
+        return _truncate_text(chat_message_text(value, ct_flag, chat_username=chat_username, sender_username=sender_username), limit)
 
     def _unpack_text_search_row(row: tuple) -> tuple[Any, str, str, Any, Any, Any]:
         content = row[0] if len(row) > 0 else ""
@@ -500,7 +500,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         ct_flag = row[5] if len(row) > 5 else None
         return content, str(sender_username or ""), str(db_path or ""), create_time, server_id, ct_flag
 
-    def _message_payload(db: Any, row: tuple, *, include_text: bool = True) -> dict[str, Any]:
+    def _message_payload(db: Any, row: tuple, *, include_text: bool = True, chat_username: str = "") -> dict[str, Any]:
         local_type = row[2] if len(row) > 2 else None
         sender = None
         sender_id = row[4] if len(row) > 4 else None
@@ -508,6 +508,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             sender = db.get_contact_by_sender_id(sender_id, row[17] if len(row) > 17 else None)
         except Exception:
             sender = None
+        sender = contact_in_chat(db, sender, chat_username)
         payload: dict[str, Any] = {
             "local_id": row[0] if len(row) > 0 else None,
             "server_id": str(row[1] if len(row) > 1 else ""),
@@ -524,6 +525,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 row[12] if len(row) > 12 else "",
                 row[15] if len(row) > 15 else None,
                 4000,
+                chat_username=chat_username,
+                sender_username=getattr(sender, "username", ""),
             )
         return payload
 
@@ -537,7 +540,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         return f"Msg_{hashlib.md5(str(contact.username).encode()).hexdigest()}"
 
     def _factory_message_payload(db: Any, contact: Any, row: tuple) -> dict[str, Any]:
-        payload = _message_payload(db, row, include_text=True)
+        payload = _message_payload(db, row, include_text=True, chat_username=contact.username if contact else "")
         factory_service = _message_factory_service()
         if not factory_service:
             payload["factory_ok"] = False
@@ -891,7 +894,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             chats.append(
                 {
                     "contact": _contact_payload(contact) if contact else {"username": username},
-                    "last_message": _message_payload(db, row, include_text=True),
+                    "last_message": _message_payload(db, row, include_text=True, chat_username=username),
                 }
             )
         chats.sort(
@@ -926,7 +929,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         bounded_limit = _bounded_int(limit, 30, 1, 200)
         rows = _rows_for_contact(db, contact, bounded_limit)
         messages = [
-            _factory_message_payload(db, contact, row) if parse_media else _message_payload(db, row, include_text=True)
+            _factory_message_payload(db, contact, row) if parse_media else _message_payload(db, row, include_text=True, chat_username=contact.username if contact else "")
             for row in rows
         ]
         if not include_non_text:
@@ -980,10 +983,10 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         messages = []
         for row in rows:
             content, sender_username, db_path, create_time, server_id, ct_flag = _unpack_text_search_row(row)
-            sender = db.get_contact_by_username(sender_username)
+            sender = contact_in_chat(db, db.get_contact_by_username(sender_username), contact.username)
             messages.append(
                 {
-                    "text": _message_content_text(content, ct_flag, 4000),
+                    "text": _message_content_text(content, ct_flag, 4000, chat_username=contact.username, sender_username=sender_username),
                     "sender_username": sender_username or "",
                     "sender_display": getattr(sender, "display_name", "") if sender else sender_username or "",
                     "create_time": create_time,
@@ -1066,7 +1069,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         bounded_limit = max(1, min(int(limit or 40), 120))
         rows = db.get_messages_by_username(contact.username, count=bounded_limit)
         rows.reverse()
-        messages = [_message_payload(db, row, include_text=True) for row in rows]
+        messages = [_message_payload(db, row, include_text=True, chat_username=contact.username if contact else "") for row in rows]
         return _json(
             {
                 "status": "ok",
@@ -1125,11 +1128,11 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         processed = []
         for row in msg_list:
             content, sender_username, _db_path, create_time, server_id, ct_flag = _unpack_text_search_row(row)
-            sender = db.get_contact_by_username(sender_username)
+            sender = contact_in_chat(db, db.get_contact_by_username(sender_username), contact.username)
             processed.append(
                 {
                     "from": sender.display_name if sender else sender_username or "未知发件人",
-                    "text": _message_content_text(content, ct_flag, 4000),
+                    "text": _message_content_text(content, ct_flag, 4000, chat_username=contact.username, sender_username=sender_username),
                     "create_time": create_time,
                     "server_id": str(server_id),
                 }

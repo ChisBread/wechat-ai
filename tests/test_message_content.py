@@ -94,3 +94,27 @@ def test_text_message_parsed_content_keeps_group_prefix_stripping():
     msg = _text_message("alice:\n群聊文本".encode("utf-8"), contact=contact, room=room)
 
     assert msg.parsed_content == "群聊文本"
+
+
+@pytest.mark.parametrize('body', ['hello alice', 'alice', ':alice:', '  空格🎃\n', 'alice:\n第二行'])
+def test_group_prefix_removal_preserves_body_exactly(body):
+    contact = SimpleNamespace(username='alice', display_name='Alice')
+    room = SimpleNamespace(username='room@chatroom', display_name='群🎃')
+    msg = _text_message('alice:\n' + body, contact=contact, room=room)
+    assert msg.parsed_content == body
+
+
+@pytest.mark.parametrize('raw', ['alice正文', 'alice: 正文', 'alice2:\n正文', '说明:\n正文'])
+def test_group_prefix_removal_requires_exact_sender_and_delimiter(raw):
+    contact = SimpleNamespace(username='alice', display_name='Alice')
+    room = SimpleNamespace(username='room@chatroom', display_name='群🎃')
+    assert _text_message(raw, contact=contact, room=room).parsed_content == raw
+
+
+def test_group_prefix_handles_compressed_self_messages_and_keeps_direct_messages():
+    zstd = pytest.importorskip('zstandard')
+    contact = SimpleNamespace(username='me', display_name='Me')
+    room = SimpleNamespace(username='room@chatroom', display_name='群🎃')
+    raw = zstd.ZstdCompressor().compress('me:\r\nhello me'.encode())
+    assert _text_message(raw, contact=contact, room=room).parsed_content == 'hello me'
+    assert _text_message('me:\nhello me', contact=contact).parsed_content == 'me:\nhello me'

@@ -56,6 +56,35 @@ class DummyOCRProcessor:
 
 
 class XFCEWindowManagerTest(unittest.TestCase):
+    def test_main_window_excludes_larger_browser_with_same_title(self):
+        manager = XFCEWindowManager(image_processor=object(), ocr_processor=object())
+
+        def fake_run(*args):
+            if args[:2] == ("xdotool", "search"):
+                return DummyCompletedProcess("2\n1\n")
+            if args[:2] == ("xdotool", "getwindowname"):
+                return DummyCompletedProcess("微信")
+            return DummyCompletedProcess()
+
+        with (
+            patch("wechat_ai_bot.rpa.xfce_window_manager._run", side_effect=fake_run),
+            patch.object(manager, "_managed_window_ids", return_value={"1", "2"}),
+            patch.object(manager, "_window_geometry", side_effect=lambda wid: {
+                "x": 0, "y": 0, "width": 1000, "height": 1800 if wid == "2" else 1200,
+            }),
+            patch.object(manager, "_is_main_process_window", side_effect=lambda wid: wid == "1"),
+        ):
+            self.assertEqual(manager._find_wechat_window(), "1")
+
+    def test_main_process_window_rejects_wechat_browser(self):
+        from pathlib import Path
+        manager = XFCEWindowManager(image_processor=object(), ocr_processor=object())
+        with (
+            patch("wechat_ai_bot.rpa.xfce_window_manager._run", return_value=DummyCompletedProcess("977")),
+            patch("wechat_ai_bot.rpa.xfce_window_manager.Path.resolve", return_value=Path("/opt/wechat/WeChatAppEx")),
+        ):
+            self.assertFalse(manager._is_main_process_window("2"))
+
     def test_menu_window_search_includes_unmanaged_wechat_popup(self):
         manager = XFCEWindowManager(image_processor=object(), ocr_processor=object())
         manager.size_config.width = 1008

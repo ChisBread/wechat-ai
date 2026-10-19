@@ -7,7 +7,7 @@ import inspect
 import logging
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -362,9 +362,21 @@ class LinuxDatabaseService:
         db_path = Path(message_db_path) if message_db_path else None
         if db_path:
             username = self._sender_username_by_id(db_path, int(sender_id))
-            if username:
-                return self.get_contact_by_username(username)
+            return self.get_contact_by_username(username) if username else None
         return self._contact_by_id.get(int(sender_id))
+
+    def get_contact_in_room(self, room_username: str, username: str) -> Optional[Contact]:
+        contact = self.get_contact_by_username(username)
+        room = self._chat_rooms.get(room_username)
+        if not contact or not room:
+            return contact
+        try:
+            room_name = room.member_display_names.get(username, "")
+        except Exception:
+            return contact
+        # Never put a room nickname into the global contact cache: the same
+        # person can have different names in different rooms.
+        return replace(contact, room_remark=room_name)
 
     def get_contact_by_display_name(self, display_name: str) -> list[Contact]:
         if not display_name:
@@ -400,7 +412,7 @@ class LinuxDatabaseService:
         except Exception:
             return []
         for username in usernames:
-            contact = self.get_contact_by_username(username)
+            contact = self.get_contact_in_room(room_user_name, username)
             if contact:
                 members.append(contact)
         return members

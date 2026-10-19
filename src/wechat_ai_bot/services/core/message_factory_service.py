@@ -8,6 +8,7 @@ import logging
 from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.weixin.message_classes import Message, MessageType, VisualTextMessage
 from wechat_ai_bot.weixin.message_factory import FACTORY_REGISTRY
+from wechat_ai_bot.weixin.message_content import contact_in_chat
 
 try:
     from wechat_ai_bot.services.core.database_service import DatabaseService
@@ -50,6 +51,7 @@ class MessageFactoryService:
         if not contact:
             self.logger.warn(f"未找到联系人: {msg_with_db[4]}")
             # TODO 有些消息是允许没有发送人的？这个时候怎么搞？是不是把他当作系统呢？
+        contact = contact_in_chat(self.db, contact, getattr(room, "username", ""))
         msg = FACTORY_REGISTRY[type_].create(
             msg_with_db, self.user_info, self.db, contact, room
         )

@@ -22,6 +22,24 @@ SQLITE_HEADER = b"SQLite format 3\x00"
 HEX_KEY_RE = re.compile(rb"x'([0-9a-fA-F]{64,192})'")
 
 
+def decode_obfuscated_sqlcipher_key(blob: bytes, salt: bytes) -> bytes | None:
+    """Recover a WCDB raw-key literal masked by a repeating 32-byte XOR pad.
+
+    The final 32 hex characters encode the database's public salt. They span
+    the whole pad, so no version-specific binary offsets or pad are needed.
+    Callers must still verify the recovered encryption key against page HMAC.
+    """
+    if len(blob) != 99 or len(salt) != 16:
+        return None
+    pad = bytearray(32)
+    for offset, value in enumerate(salt.hex().encode("ascii"), 66):
+        pad[offset % 32] = blob[offset] ^ value
+    literal = bytes(value ^ pad[offset % 32] for offset, value in enumerate(blob))
+    if not re.fullmatch(rb"[xX]'[0-9a-fA-F]{96}'", literal):
+        return None
+    return bytes.fromhex(literal[2:66].decode("ascii"))
+
+
 def sqlcipher_driver_name() -> str:
     """Return the DB-API compatible Python SQLCipher module name."""
     for name in ("sqlcipher3", "pysqlcipher3"):
@@ -196,8 +214,63 @@ class SqlCipherKeyScanner:
                             return result
                         pos += len(chunk)
 
+                self._scan_obfuscated_keys(mem, pid, pages_by_salt, found_by_salt, result)
+                for salt, raw_key in found_by_salt.items():
+                    for path, _page in pages_by_salt[salt]:
+                        result.found_keys[path] = raw_key
+                if len(result.found_keys) >= target_count:
+                    result.duration_seconds = time.time() - started
+                    return result
+
         result.duration_seconds = time.time() - started
         return result
+
+    def _scan_obfuscated_keys(self, mem, pid, pages_by_salt, found_by_salt, result):
+        """Read bounded WCDB buffers referenced by pointer/length pairs (4.1+)."""
+        regions = self._readable_regions(pid)
+        seen_pointers = set()
+        for start, end in self._readable_regions(pid, writable_only=True):
+            carry = b""
+            pos = start
+            while pos < end:
+                try:
+                    mem.seek(pos)
+                    chunk = mem.read(min(self.chunk_size, end - pos))
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                data = carry + chunk
+                for match in re.finditer(rb"[\x63\x64]\x00{7}", data):
+                    offset = match.start()
+                    if offset < 8:
+                        continue
+                    pointer = struct.unpack_from("<Q", data, offset - 8)[0]
+                    if pointer in seen_pointers:
+                        continue
+                    seen_pointers.add(pointer)
+                    if not any(a <= pointer and pointer + 99 <= b for a, b in regions):
+                        continue
+                    try:
+                        mem.seek(pointer)
+                        blob = mem.read(99)
+                    except OSError:
+                        continue
+                    if len(blob) != 99:
+                        continue
+                    result.candidate_count += 1
+                    for salt, pages in pages_by_salt.items():
+                        if salt in found_by_salt:
+                            continue
+                        key = decode_obfuscated_sqlcipher_key(blob, salt)
+                        if key is not None and any(
+                            verify_sqlcipher_page_hmac(page, key) for _, page in pages
+                        ):
+                            found_by_salt[salt] = key.hex() + salt.hex()
+                    if len(found_by_salt) == len(pages_by_salt):
+                        return
+                carry = data[-16:]
+                pos += len(chunk)
 
     def _match_candidate(
         self,
@@ -219,15 +292,15 @@ class SqlCipherKeyScanner:
                 continue
             try:
                 comm = (entry / "comm").read_text(errors="ignore").strip()
-                cmdline = (entry / "cmdline").read_bytes().replace(b"\x00", b" ")
+                executable = (entry / "cmdline").read_bytes().split(b"\x00", 1)[0]
                 rss_pages = int((entry / "statm").read_text().split()[1])
             except (OSError, IndexError, ValueError):
                 continue
-            if comm in self.process_names or b"wechat" in cmdline.lower():
+            if comm in self.process_names or Path(executable.decode(errors="ignore")).name in self.process_names:
                 pids.append((rss_pages, int(entry.name)))
         return [pid for _rss, pid in sorted(pids, reverse=True)]
 
-    def _readable_regions(self, pid: int) -> list[tuple[int, int]]:
+    def _readable_regions(self, pid: int, *, writable_only: bool = False) -> list[tuple[int, int]]:
         try:
             lines = Path(f"/proc/{pid}/maps").read_text(errors="ignore").splitlines()
         except OSError:
@@ -236,6 +309,8 @@ class SqlCipherKeyScanner:
         for line in lines:
             parts = line.split(maxsplit=5)
             if len(parts) < 2 or "r" not in parts[1]:
+                continue
+            if writable_only and "w" not in parts[1]:
                 continue
             path = parts[5] if len(parts) > 5 else ""
             if self._skip_mapping(path):
