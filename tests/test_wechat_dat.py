@@ -112,8 +112,8 @@ class WeChatDatTest(unittest.TestCase):
 
         result = decrypt_dat_bytes(dat, aes_key=key, xor_key=60)
 
-        self.assertEqual(result.media_type, "video/hevc")
-        self.assertEqual(result.extension, ".hevc")
+        self.assertEqual(result.media_type, "application/x-wechat-wxgf")
+        self.assertEqual(result.extension, ".wxgf")
         self.assertEqual(result.data, plain)
 
     def test_decrypt_wxgf_requires_explicit_xor_key(self):

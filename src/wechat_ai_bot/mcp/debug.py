@@ -17,6 +17,7 @@ from mimetypes import guess_type
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any
+from types import SimpleNamespace
 from urllib.parse import quote
 
 from PIL import Image, ImageDraw
@@ -29,6 +30,7 @@ from wechat_ai_bot.services.core.wechat_dat import (
     infer_xor_key,
     parse_dat_file,
 )
+from wechat_ai_bot.services.core.wechat_image import image_variants, image_tier, present_dat_image
 from wechat_ai_bot.weixin.message_content import chat_message_text, contact_in_chat
 from wechat_ai_bot.services.core.wechat_dat_key_discovery import derive_dat_key_for_file
 
@@ -726,7 +728,7 @@ def build_debug_status(
             "stride": getattr(visual_service, "yolo_stride", None),
         },
         "database": _expand_database_status(database_service, db_report, show_sensitive=show_sensitive),
-        "media": _media_status(getattr(bot, "user_info", None)),
+        "media": _media_status(getattr(bot, "user_info", None), config),
         "plugins": _plugin_status(plugin_manager),
         "debug": {
             "raw_screenshot_enabled": bool(_config_get(config, "debug.allow_raw_screenshot", False)),
@@ -1232,65 +1234,82 @@ def _add_media_urls(payload: dict[str, Any]) -> None:
 
 
 def add_media_base64(database_service: Any, payload: dict[str, Any]) -> None:
+    errors = []
+    seen = set()
     for key in ("path", "thumb_path", "cover_path"):
         raw_path = str(payload.get(key) or "")
         if not raw_path:
             continue
         for candidate_path in _base64_media_path_candidates(raw_path):
+            if candidate_path in seen:
+                continue
+            seen.add(candidate_path)
             resolved = _resolve_dashboard_media_path(database_service, candidate_path)
             if not resolved:
                 continue
-            if _add_media_base64_from_path(database_service, payload, resolved):
-                return
+            try:
+                if _add_media_base64_from_path(database_service, payload, resolved):
+                    payload["media_path"] = candidate_path
+                    payload["media_url"] = _media_url(candidate_path)
+                    payload["media_tier"] = image_tier(resolved)
+                    payload["is_thumbnail"] = image_tier(resolved) == "thumbnail"
+                    if errors:
+                        payload["media_fallback_errors"] = errors
+                    if payload["media_tier"] == "standard":
+                        payload["media_fallback_reason"] = "original_unavailable"
+                    if payload["is_thumbnail"]:
+                        payload["media_fallback_reason"] = "higher_resolution_unavailable"
+                    return
+            except (WeChatDatError, OSError) as exc:
+                errors.append({"path": candidate_path, "error": str(exc)})
+    if seen or payload.get("type") == 3:
+        payload["media_status"] = "unavailable"
+        payload["media_errors"] = errors or [{"error": "media_file_not_downloaded"}]
 
 
 def _base64_media_path_candidates(raw_path: str) -> list[str]:
-    path = Path(raw_path)
-    candidates: list[str] = []
-    if path.name.endswith("_t.dat"):
-        candidates.append(str(path.with_name(f"{path.name[:-6]}.dat")))
-    candidates.append(raw_path)
-    return candidates
+    return [str(path) for path in image_variants(raw_path)]
 
 
 def _add_media_base64_from_path(database_service: Any, payload: dict[str, Any], resolved: Path) -> bool:
-    max_bytes = 5 * 1024 * 1024
-    try:
-        if resolved.stat().st_size > max_bytes:
-            return False
-    except OSError:
-        return False
-    try:
-        dat_info = parse_dat_file(resolved)
-    except WeChatDatError:
-        return False
-    if dat_info is not None:
-        user_info = getattr(database_service, "user_info", None)
-        dat_key = str(getattr(user_info, "dat_key", "") or "").strip()
-        dat_xor_key = getattr(user_info, "dat_xor_key", -1)
-        result = None
-        try:
-            result = decrypt_dat_file(resolved, aes_key=dat_key, xor_key=dat_xor_key)
-        except WeChatDatError:
-            inferred_xor_key = _infer_dat_xor_key(resolved, dat_info)
-            if inferred_xor_key is not None and inferred_xor_key != dat_xor_key:
-                try:
-                    result = decrypt_dat_file(resolved, aes_key=dat_key, xor_key=inferred_xor_key)
-                except WeChatDatError:
-                    result = None
-        if not result or not (result.media_type.startswith("image/") or result.media_type.startswith("video/")):
-            return False
-        payload["base64"] = base64.b64encode(result.data).decode("ascii")
-        payload["base64_mime_type"] = result.media_type
+    # Large files remain available via the authenticated media URL. Do not
+    # silently replace them with a thumbnail just to fit the inline budget.
+    max_inline_bytes = 5 * 1024 * 1024
+    if resolved.stat().st_size > 64 * 1024 * 1024:
+        payload.update(media_status="too_large", media_inline_reason="input_exceeds_64_mib")
         return True
-    media_type = _guess_file_media_type(resolved)
+    dat_info = parse_dat_file(resolved)
+    if dat_info is not None:
+        result, refreshed, inferred = _decode_dat_media(
+            resolved, dat_info, getattr(database_service, "user_info", None),
+            bot=SimpleNamespace(database_service=database_service),
+            config=getattr(database_service, "config", None),
+        )
+        data, media_type = result.data, result.media_type
+        payload["media_key_refreshed"] = refreshed
+        if result.conversion:
+            payload["media_conversion"] = result.conversion
+    else:
+        media_type = _guess_file_media_type(resolved)
+        data = resolved.read_bytes()
     if not (media_type.startswith("image/") or media_type.startswith("video/")):
+        if resolved.suffix.lower() == ".dat":
+            raise WeChatDatError("DAT payload is not a supported image")
         return False
-    try:
-        payload["base64"] = base64.b64encode(resolved.read_bytes()).decode("ascii")
-    except OSError:
-        return False
+    payload["media_mime_type"] = media_type
+    payload["media_size_bytes"] = len(data)
+    if media_type.startswith("image/"):
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                payload["media_width"], payload["media_height"] = image.size
+        except Exception:
+            pass
+    if len(data) > max_inline_bytes:
+        payload.update(media_status="available", media_inline_reason="exceeds_5_mib")
+        return True
+    payload["base64"] = base64.b64encode(data).decode("ascii")
     payload["base64_mime_type"] = media_type
+    payload["media_status"] = "available"
     return True
 
 
@@ -1418,89 +1437,89 @@ def _dashboard_dat_media_response(
     if info is None:
         return None
 
-    from starlette.responses import JSONResponse, Response
+    from starlette.responses import JSONResponse
 
-    dat_key = str(getattr(user_info, "dat_key", "") or "").strip()
-    dat_xor_key = getattr(user_info, "dat_xor_key", -1)
-    inferred_xor_key = _infer_dat_xor_key(file_path, info)
     try:
-        result = decrypt_dat_file(file_path, aes_key=dat_key, xor_key=dat_xor_key)
-    except WeChatDatError as exc:
-        if inferred_xor_key is not None and inferred_xor_key != dat_xor_key:
-            try:
-                result = decrypt_dat_file(
-                    file_path,
-                    aes_key=dat_key,
-                    xor_key=inferred_xor_key,
-                )
-            except WeChatDatError:
-                pass
-            else:
-                _update_dat_runtime_keys(
-                    user_info=user_info,
-                    config=config or getattr(bot, "config", None),
-                    aes_key=dat_key,
-                    xor_key=inferred_xor_key,
-                )
-                return _dat_media_binary_response(
-                    result,
-                    file_path=file_path,
-                    headers=headers,
-                    as_download=as_download,
-                    refreshed=False,
-                    inferred_xor=True,
-                )
-        refreshed = _refresh_dat_key_for_media(
-            file_path,
-            info,
-            inferred_xor_key,
-            user_info=user_info,
-            bot=bot,
-            config=config,
+        result, refreshed, inferred = _decode_dat_media(
+            file_path, info, user_info, bot=bot, config=config,
         )
-        if refreshed:
-            try:
-                result = decrypt_dat_file(
-                    file_path,
-                    aes_key=refreshed.config_value,
-                    xor_key=refreshed.xor_key,
-                )
-            except WeChatDatError:
-                pass
-            else:
-                return _dat_media_binary_response(
-                    result,
-                    file_path=file_path,
-                    headers=headers,
-                    as_download=as_download,
-                    refreshed=True,
-                    inferred_xor=False,
-                )
+    except (WeChatDatError, OSError) as exc:
         return JSONResponse(
-            {
-                "ok": False,
-                "error": str(exc),
-                "path": str(file_path),
-                "file_name": file_path.name,
-                "dat": True,
-                "dat_info": info.to_dict(),
-                "has_dat_key": bool(dat_key),
-                "dat_xor_key": dat_xor_key,
-                "inferred_dat_xor_key": inferred_xor_key,
-                "refreshed_dat_key": False,
-            },
-            status_code=422,
-            headers={**headers, "Cache-Control": "no-store"},
+            {"ok": False, "error": str(exc), "path": str(file_path),
+             "file_name": file_path.name, "dat": True, "dat_info": info.to_dict(),
+             "has_dat_key": bool(getattr(user_info, "dat_key", "")),
+             "inferred_dat_xor_key": _infer_dat_xor_key(file_path, info)},
+            status_code=422, headers={**headers, "Cache-Control": "no-store"},
         )
-
     return _dat_media_binary_response(
-        result,
-        file_path=file_path,
-        headers=headers,
-        as_download=as_download,
-        refreshed=False,
-        inferred_xor=False,
+        result, file_path=file_path, headers=headers, as_download=as_download,
+        refreshed=refreshed, inferred_xor=inferred,
     )
+
+
+def restore_dat_media_keys(database_service: Any, config: Any) -> bool:
+    """Recover from a bounded set of local images at startup; never send a probe."""
+    user_info = getattr(database_service, "user_info", None)
+    account = getattr(database_service, "_primary_account", None)
+    if not user_info or not account:
+        return False
+    if getattr(user_info, "dat_key", "") and 0 <= getattr(user_info, "dat_xor_key", -1) <= 255:
+        return True
+    # Most recent month first; cap decoding attempts to keep startup bounded.
+    folders = sorted((account.account_dir / "msg" / "attach").glob("*/*/Img"),
+                     key=lambda p: p.parent.name, reverse=True)
+    attempts = 0
+    for folder in folders:
+        for path in folder.glob("*.dat"):
+            attempts += 1
+            try:
+                info = parse_dat_file(path)
+                if info is not None:
+                    _decode_dat_media(path, info, user_info,
+                        bot=SimpleNamespace(database_service=database_service), config=config)
+                    if getattr(user_info, "dat_key", "") and 0 <= user_info.dat_xor_key <= 255:
+                        return True
+            except (WeChatDatError, OSError):
+                pass
+            if attempts >= 12:
+                return False
+    return False
+
+
+def _decode_dat_media(file_path, info, user_info, *, bot=None, config=None):
+    """Shared Dashboard/MCP recovery. Cache only a fully validated DAT key."""
+    if file_path.stat().st_size > 64 * 1024 * 1024:
+        raise WeChatDatError("DAT input exceeds 64 MiB decoding limit")
+    key = str(getattr(user_info, "dat_key", "") or "").strip()
+    xor = getattr(user_info, "dat_xor_key", -1)
+    def decode(aes_key, xor_key):
+        return present_dat_image(decrypt_dat_file(file_path, aes_key=aes_key, xor_key=xor_key))
+
+    refreshed = inferred = False
+    try:
+        result = decode(key, xor)
+    except WeChatDatError as original_error:
+        inferred_xor = _infer_dat_xor_key(file_path, info)
+        result = None
+        if inferred_xor is not None and inferred_xor != xor:
+            try:
+                result = decode(key, inferred_xor)
+                xor, inferred = inferred_xor, True
+            except WeChatDatError:
+                pass
+        if result is None:
+            db = getattr(bot, "database_service", None)
+            root = getattr(db, "root", None) or _config_get(config, "debug.xwechat_files_root", "/config/xwechat_files")
+            derived = derive_dat_key_for_file(file_path, xwechat_root=root, info=info, xor_key=None)
+            if not derived:
+                raise original_error
+            result = decode(derived.config_value, derived.xor_key)
+            key, xor, refreshed = derived.config_value, derived.xor_key, True
+    # Persist validated keys even when they were already cached in memory by
+    # an earlier caller, or a previous configuration write failed.
+    if key and 0 <= xor <= 255:
+        _update_dat_runtime_keys(user_info=user_info, config=config, aes_key=key, xor_key=xor)
+    return result, refreshed, inferred
 
 
 def _dat_media_binary_response(
@@ -1525,50 +1544,13 @@ def _dat_media_binary_response(
         f"{file_path.stem}{result.extension}",
     )
     response.headers["X-WeChat-Dat-Version"] = result.info.version
+    if result.conversion:
+        response.headers["X-WeChat-Media-Conversion"] = result.conversion
     if refreshed:
         response.headers["X-WeChat-Dat-Key-Refreshed"] = "1"
     if inferred_xor:
         response.headers["X-WeChat-Dat-Xor-Inferred"] = "1"
     return response
-
-
-def _refresh_dat_key_for_media(
-    file_path: Path,
-    info: Any,
-    inferred_xor_key: int | None,
-    *,
-    user_info: Any,
-    bot: Any | None,
-    config: Any | None,
-) -> Any | None:
-    database_service = getattr(bot, "database_service", None)
-    root = (
-        getattr(database_service, "xwechat_files_root", None)
-        or getattr(database_service, "root", None)
-        or _config_get(
-            config,
-            "debug.xwechat_files_root",
-            "/config/xwechat_files",
-        )
-    )
-    try:
-        derived = derive_dat_key_for_file(
-            file_path,
-            xwechat_root=root,
-            info=info,
-            xor_key=inferred_xor_key,
-        )
-    except Exception:
-        return None
-    if not derived:
-        return None
-    _update_dat_runtime_keys(
-        user_info=user_info,
-        config=config or getattr(bot, "config", None),
-        aes_key=derived.config_value,
-        xor_key=derived.xor_key,
-    )
-    return derived
 
 
 def _update_dat_runtime_keys(
@@ -1585,9 +1567,11 @@ def _update_dat_runtime_keys(
 
 
 def _persist_dat_key_config(config: Any, aes_key: str, xor_key: int) -> bool:
-    if not config:
+    if config is None:
         return False
     value = f"{aes_key},{int(xor_key)}"
+    if _config_get(config, "aes_xor_key", "") == value:
+        return True
     if hasattr(config, "set"):
         try:
             config.set("aes_xor_key", value)
@@ -1793,12 +1777,14 @@ def _mqtt_status(mqtt_service: Any) -> dict[str, Any]:
     }
 
 
-def _media_status(user_info: Any) -> dict[str, Any]:
+def _media_status(user_info: Any, config: Any = None) -> dict[str, Any]:
     if not user_info:
         return {"dat_key_configured": False, "dat_xor_key": -1}
     dat_key = str(getattr(user_info, "dat_key", "") or "")
     return {
         "dat_key_configured": bool(dat_key),
+        "dat_key_persisted": bool(dat_key) and _config_get(config, "aes_xor_key", "") ==
+            f"{dat_key},{getattr(user_info, 'dat_xor_key', -1)}",
         "dat_xor_key": getattr(user_info, "dat_xor_key", -1),
     }
 

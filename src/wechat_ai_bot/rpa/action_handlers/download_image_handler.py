@@ -1,7 +1,6 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
-import wechat_ai_bot.utils.mouse as pyautogui
 from wechat_ai_bot.rpa.action_handlers.base_handler import (
     BaseActionHandler,
     RPAAction,
@@ -32,12 +31,7 @@ class DownloadImageHandler(BaseActionHandler):
         Returns:
             bool: 操作是否成功。
         """
-        try:
-            if not self.window_manager.switch_session(action.target):
-                return False
-            pyautogui.scroll(-1000)
-            # TODO: 实现高清图片下载逻辑
-            # 目前仅切换会话并返回True，后续可补充保存图片等功能
-            return True
-        finally:
-            self._cleanup()
+        # There is no message-specific download/verification implementation yet.
+        # Switching chats cannot establish that an original image was downloaded.
+        self.logger.error("Original image download is unavailable; open the image in WeChat and download the original")
+        return False

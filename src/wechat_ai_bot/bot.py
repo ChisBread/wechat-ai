@@ -96,6 +96,7 @@ class Bot:
         if database_config.get("enabled", True):
             self.database_service = LinuxDatabaseService(
                 user_info=self.user_info,
+                config=self.config,
                 xwechat_files_root=database_config.get(
                     "xwechat_files_root", "/config/xwechat_files"
                 ),
@@ -210,6 +211,10 @@ class Bot:
                     self.logger.info(f"  {name}: setup complete")
             except Exception as e:
                 self.logger.error(f"  {name}: setup failed: {e}")
+
+        if self.database_service:
+            from wechat_ai_bot.mcp.debug import restore_dat_media_keys
+            restore_dat_media_keys(self.database_service, self.config)
 
         self._select_message_input_services()
 

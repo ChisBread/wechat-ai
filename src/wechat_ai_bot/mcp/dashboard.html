@@ -1036,8 +1036,11 @@
         ['联系人', esc(db.contacts ?? '')],
         ['群聊', esc(db.rooms ?? '')],
         ['图片 DAT Key', media.dat_key_configured ? info('已配置') : warn('未配置')],
+        ['图片密钥保存', media.dat_key_persisted ? info('已保存') : warn('未保存')],
         ['图片 XOR Key', esc(media.dat_xor_key ?? '')],
         ['连接数', esc(db.open_connections ?? '')],
+        ['失效连接恢复', esc(db.connection_replacements ?? '')],
+        ['孤立 WAL 快照', esc(db.orphan_wal_snapshots ?? '')],
         ['连续轮询错误', esc(db.consecutive_poll_errors ?? '')],
         ['上次自动恢复', esc(db.last_auto_refresh_at ? new Date(db.last_auto_refresh_at * 1000).toLocaleString() : '')],
         ['上次扫描', esc(db.last_scan_at ? new Date(db.last_scan_at * 1000).toLocaleString() : '')],
@@ -1404,12 +1407,19 @@
     }
 
     function imageMessageHtml(m, fallbackText) {
-      const src = m.path_url || m.thumb_path_url || m.thumb_url || m.url || '';
-      if (!src) return `<div>${esc(fallbackText)}</div>`;
+      const src = m.media_url || m.path_url || m.thumb_path_url || m.thumb_url || m.url || '';
       const title = m.type_name || '图片';
-      return `<a href="${esc(m.path_url || src)}" target="_blank" rel="noreferrer">
+      const tier = {original: '原图', standard: '普通图（原图不可用）', thumbnail: '缩略图（大图不可用）', file: '图片文件'}[m.media_tier] || '';
+      const dimensions = m.media_width && m.media_height ? `${m.media_width} × ${m.media_height}` : '';
+      const preview = m.media_conversion === 'wxgf_first_frame_png' ? '首帧预览' : '';
+      const detail = [tier, dimensions, preview].filter(Boolean).join(' · ');
+      if (m.media_status === 'unavailable' || m.media_status === 'too_large') {
+        return `<div class="media-sub">图片暂不可预览，请查看媒体诊断或在微信中下载原图。</div>`;
+      }
+      if (!src) return `<div>${esc(fallbackText)}</div>`;
+      return `<a href="${esc(src)}" target="_blank" rel="noreferrer">
         <img class="media-image" src="${esc(src)}" alt="${esc(title)}">
-      </a>`;
+      </a>${detail ? `<div class="media-sub">${esc(detail)}</div>` : ''}`;
     }
 
     function videoMessageHtml(m, fallbackText) {

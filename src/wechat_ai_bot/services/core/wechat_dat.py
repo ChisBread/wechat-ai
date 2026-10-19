@@ -21,7 +21,7 @@ IMAGE_MAGIC_TYPES = (
     (b"RIFF", "image/webp", ".webp"),
     (b"BM", "image/bmp", ".bmp"),
     (b"II*\x00", "image/tiff", ".tif"),
-    (b"wxgf", "video/hevc", ".hevc"),
+    (b"wxgf", "application/x-wechat-wxgf", ".wxgf"),
 )
 
 
@@ -74,6 +74,7 @@ class WeChatDatDecryptResult:
     media_type: str
     extension: str
     info: WeChatDatInfo
+    conversion: str = ""
 
 
 def parse_dat_info(data: bytes) -> WeChatDatInfo | None:

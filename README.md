@@ -199,6 +199,8 @@ Linux 微信 4.x 的业务数据库在：
 
 key 只保存在 bot 进程内存中，不写入磁盘。
 
+数据库连接以只读方式打开，每次复用及查询返回前检查主数据库、WAL 和 SHM 的文件身份。文件替换时会丢弃旧连接、重建消息映射并保留已有消费游标。若微信仍向已删除的 WAL 写入，则通过 `/proc/<wechat-pid>/fd` 读取对应日志，在 SQLite WAL 写入/检查点锁保护下生成私有的加密临时快照，随后续提交更新；不覆盖或删除微信源文件。正常 WAL 追加复用连接。数据库状态中的 `connection_replacements` 记录失效连接次数，`orphan_wal_snapshots` 表示当前使用的孤立 WAL 快照数。此恢复依赖同一 PID 命名空间和读取微信文件描述符的权限；容器默认 root 运行可满足。
+
 群消息展示使用当前群的成员昵称，显示名称优先级为联系人备注、群内昵称、普通昵称、用户名。管理台、MCP 和消息处理链统一移除正文开头完整的 `发送者用户名:\n` 前缀，保留正文自身的字符和空白。
 
 bot 服务以 root 运行，是为了读取 `/proc/<wechat-pid>/mem`。微信、X11 和桌面会话仍按容器桌面用户运行。
@@ -209,13 +211,21 @@ bot 服务以 root 运行，是为了读取 `/proc/<wechat-pid>/mem`。微信、
 
 - Linux 微信 4.x 图片 DAT 使用 `V2` 结构：`15 字节头 + PKCS7 padding 后的 AES-ECB 前缀 + 可选 raw 中段 + XOR 尾部`。
 - 项目已经能识别 DAT 头、推断常见单字节 XOR key，并在配置了 AES key 时把图片解成 PNG/JPEG/GIF/WebP/BMP/TIFF 返回给管理台。
-- 微信的 `wxgf` 图片会解成 HEVC 裸流并以 `video/hevc` / `.hevc` 返回。浏览器不一定能直接预览，后续可以增加 HEVC 首帧转 JPEG 或 MP4 封装。
-- `aes_xor_key` 为空时仍可看到图片消息和本地路径，但浏览器不能直接显示加密图片；此时 `/dashboard/media` 会返回 JSON 诊断，提示缺少 DAT AES key。
+- `wxgf` 是包含 HEVC 的微信图片封装。Dashboard 和 MCP 会提取码流、通过 FFmpeg 转为 PNG 首帧预览，保留解码尺寸，不把封装数据当成裸 HEVC 返回。Docker 镜像包含 FFmpeg；本机运行需自行安装。动画及透明遮罩不保证保留，返回 `media_conversion=wxgf_first_frame_png` 标明首帧预览。
+- `aes_xor_key` 缺失时，启动阶段会尝试用本地图片和 `kvcomm` 派生并验证密钥；Dashboard 和 MCP 解密时也会自动恢复缺失或失效的密钥。验证成功后原子写回配置（权限 0600），重启后直接加载，不发送探测消息。运行状态 `media.dat_key_persisted` 显示是否已保存；失败会返回具体诊断，不再静默省略图片。
 - `aes_xor_key` 格式为 `AES文本key,60`；如果你拿到的是十六进制原始 key，用 `hex:<hexkey>,60`。
 
 管理台顶部的“发现图片密钥”和 MCP 工具 `discover_dat_keys` 会自动生成 probe 图片、发送到文件传输助手、定位新生成的 `_h.dat`、推断 XOR key，并优先用 Linux 微信的 `kvcomm/key_<code>_*.statistic` 与账号目录派生 AES key。派生失败时会退回到 WeChat 相关进程内存扫描。
 
-发现成功后会自动写回 `aes_xor_key`，后续直接复用这个持久化 key。若某次媒体解密发现持久化 key 已失效，Dashboard 会先基于当前 DAT 和本地 `kvcomm` 做一次不发送消息的轻量刷新；仍失败时才需要手动点击“发现图片密钥”或调用 `discover_dat_keys(send_probe=true)` 重新发送 probe。
+发现成功后会自动写回 `aes_xor_key`，后续直接复用这个持久化 key。若某次媒体解密发现持久化 key 已失效，Dashboard 和 MCP 会先基于当前 DAT 和本地 `kvcomm` 做一次不发送消息的轻量刷新；仍失败时才需要手动点击“发现图片密钥”或调用 `discover_dat_keys(send_probe=true)` 重新发送 probe。
+
+图片读取优先选择 `_h.dat` 原图档，再选择 `.dat` 普通图，最后回退到 `_t.dat` 缩略图。MCP 返回 `media_tier`、`is_thumbnail`、`media_width`、`media_height`、`media_path` 和 `media_url`；降级时返回 `media_fallback_reason`，解密或转换失败还会提供 `media_fallback_errors` / `media_errors`。普通图不能据此认定为原图。
+
+供视觉模型看图时，使用现有 `get_recent_messages(parse_media=true)` 或 `get_recent_media_messages`。响应的第一个内容块为 JSON 元数据，后续为 MCP 原生 `ImageContent`；消息的 `image_content_index` 指向对应内容块，`image_count` 表示实际返回的图片数。图片 base64 仅放在图片内容块中，避免作为大段文本重复传给模型；分辨率、图片档位、媒体地址和失败诊断仍保留在 JSON 中。调用端应转发完整 `content` 列表，而非只读取第一个文本块。普通消息读取（`parse_media=false`）和 Dashboard 返回格式不变。
+
+超过 5 MiB 的解码结果不内嵌 base64，但保留所选图片及受 Dashboard 认证保护的媒体地址，返回 `media_inline_reason=exceeds_5_mib`，不会为满足大小限制偷偷换成缩略图。DAT 解码限制输入为 64 MiB，WXGF 转换限制 20 秒和 4000 万像素。
+
+自动原图下载尚未实现，`DownloadImageHandler` 现在明确返回失败，不再仅切换会话、滚动就报告成功。原图尚未落盘时，可先在微信中打开对应图片并下载原图，再重新读取。
 
 后续 TODO：
 
