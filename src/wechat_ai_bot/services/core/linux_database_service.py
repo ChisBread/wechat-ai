@@ -10,7 +10,10 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable, Optional
+from urllib.parse import quote
 
+from wechat_ai_bot.services.core.wechat_image import image_variants
+from wechat_ai_bot.services.core.linux_database_files import LinuxDatabaseFiles
 from wechat_ai_bot.models import ChatRoom, Contact, FMessage, UserInfo
 from wechat_ai_bot.services.core.linux_database_discovery import (
     LinuxDatabaseDiscovery,
@@ -64,12 +67,14 @@ class LinuxDatabaseService:
         *,
         xwechat_files_root: str | Path = "/config/xwechat_files",
         scan_keys: bool = True,
+        config: Any = None,
         active_account: str = "",
         key_retry_interval: float = 10.0,
         message_map_refresh_interval: float = 30.0,
     ):
         self.logger = logging.getLogger(__name__)
         self.user_info = user_info
+        self.config = config
         self.root = Path(xwechat_files_root)
         self.scan_keys_enabled = scan_keys
         self.active_account = active_account
@@ -83,6 +88,10 @@ class LinuxDatabaseService:
         self._accounts: list[LinuxDatabaseAccount] = []
         self._primary_account: LinuxDatabaseAccount | None = None
         self._connections: dict[Path, Any] = {}
+        self._connection_identities: dict[Path, tuple] = {}
+        self._database_files = LinuxDatabaseFiles()
+        self._replaced_message_paths: set[Path] = set()
+        self._connection_replacements = 0
         self._keys: dict[Path, str] = {}
         self._table_sequences: dict[tuple[Path, str], int] = {}
         self._message_username_map: dict[str, set[Path]] = {}
@@ -124,6 +133,8 @@ class LinuxDatabaseService:
                 except Exception:
                     pass
             self._connections.clear()
+            self._connection_identities.clear()
+            self._database_files.close()
             self.last_error = ""
             self._consecutive_poll_errors = 0
             self._discover_accounts()
@@ -138,6 +149,11 @@ class LinuxDatabaseService:
             self.load_contacts()
             self.load_chat_rooms()
             self.load_message_username_map()
+            if preserve_sequences:
+                # Include new tables initialized while recovering a replacement;
+                # otherwise priming would skip their newly available backlog.
+                for table, sequence in self._table_sequences.items():
+                    previous_sequences.setdefault(table, sequence)
             self._prime_message_sequences(previous_sequences)
             self.is_available = bool(self._message_tables())
             if not self.is_available and not self.last_error:
@@ -152,6 +168,8 @@ class LinuxDatabaseService:
                 except Exception:
                     pass
             self._connections.clear()
+            self._connection_identities.clear()
+            self._database_files.close()
 
     def rescan_keys(self) -> dict[str, Any]:
         with self._lock:
@@ -181,7 +199,12 @@ class LinuxDatabaseService:
             for attempt in range(2):
                 try:
                     conn = self._connection(db_path)
-                    return list(conn.execute(query, params).fetchall())
+                    rows = list(conn.execute(query, params).fetchall())
+                    if self._invalidate_replaced_connection(db_path):
+                        if attempt:
+                            raise OSError(f"Database changed repeatedly during query: {db_path.name}")
+                        continue
+                    return rows
                 except Exception as exc:
                     if attempt or not self._is_recoverable_database_error(exc):
                         raise
@@ -196,7 +219,9 @@ class LinuxDatabaseService:
             return []
 
     def get_db_path_by_username(self, username: str) -> list[Path]:
-        return sorted(self._message_username_map.get(username, set()))
+        with self._lock:
+            self._refresh_message_maps_if_needed()
+            return sorted(self._message_username_map.get(username, set()))
 
     def get_all_db_files(self) -> list[Path]:
         return sorted(
@@ -479,16 +504,32 @@ class LinuxDatabaseService:
 
     def load_message_username_map(self) -> None:
         existing_sequences = set(self._table_sequences)
-        self._message_username_map.clear()
-        self._table_username_map.clear()
+        previous_tables = self._table_username_map
+        self._message_username_map = {}
+        self._table_username_map = {}
         for account in self._accounts_for_queries():
-            for db_path in sorted(account.db_storage_dir.glob("message/message_*.db")):
+            paths = set(account.db_storage_dir.glob("message/message_*.db"))
+            paths.update(path for path in self._replaced_message_paths
+                         if path.parent == account.db_storage_dir / "message")
+            for db_path in sorted(paths):
                 if not self._has_key(db_path):
                     continue
                 try:
-                    rows = self.execute_query(db_path, "select rowid, user_name from Name2Id")
-                    tables = set(self.get_db_tables(db_path))
+                    for attempt in range(2):
+                        identity = self._file_identity(db_path)
+                        rows = self.execute_query(db_path, "select rowid, user_name from Name2Id")
+                        tables = set(self.get_db_tables(db_path))
+                        if self._file_identity(db_path) == identity:
+                            break
+                        if attempt:
+                            raise OSError(f"Database changed while loading message maps: {db_path.name}")
                 except Exception:
+                    # Keep failed paths pollable so existing error/key recovery
+                    # can run, and do not lose their consumption offsets.
+                    for (old_path, table), username in previous_tables.items():
+                        if old_path == db_path:
+                            self._table_username_map[(old_path, table)] = username
+                            self._message_username_map.setdefault(username, set()).add(old_path)
                     continue
                 for _rowid, username in rows:
                     if not username:
@@ -499,9 +540,11 @@ class LinuxDatabaseService:
                     self._message_username_map.setdefault(username, set()).add(db_path)
                     self._table_username_map[(db_path, table_name)] = username
                     if existing_sequences and (db_path, table_name) not in existing_sequences:
-                        self._table_sequences[(db_path, table_name)] = self._max_local_id(
-                            db_path, table_name
+                        self._table_sequences[(db_path, table_name)] = (
+                            0 if db_path in self._replaced_message_paths
+                            else self._max_local_id(db_path, table_name)
                         )
+                self._replaced_message_paths.discard(db_path)
         self._last_message_map_refresh = time.time()
 
     def get_image_by_md5(self, md5: str) -> Optional[tuple]:
@@ -555,14 +598,14 @@ class LinuxDatabaseService:
             row = self.get_image_by_md5(image_md5)
             if row:
                 rel = self._hardlink_relative_path(row, "Img", thumb=thumb)
-                if rel:
+                if rel and self._first_existing_relative([rel]):
                     return rel
         file_name = str(getattr(message, "file_name", "") or "")
         if file_name:
             row = self._hardlink_by_file_name("image_hardlink_info_v4", file_name)
             if row:
                 rel = self._hardlink_relative_path(row, "Img", thumb=thumb)
-                if rel:
+                if rel and self._first_existing_relative([rel]):
                     return rel
             rel = self._image_by_filename(file_name, message, sender_wxid, thumb=thumb)
             if rel:
@@ -572,17 +615,13 @@ class LinuxDatabaseService:
         return self.get_image_by_time(message, sender_wxid)
 
     def get_image_thumb(self, message: Any, sender_wxid: str) -> Optional[Path]:
-        path = self.get_image_by_time(message, sender_wxid)
+        path = self.get_image_by_time(message, sender_wxid, thumb=True)
         if not path:
             return None
-        candidates = [
-            path.with_name(f"{path.stem}_t{path.suffix}"),
-            path.with_name(f"{path.stem}_t.dat"),
-            path.with_name(f"{path.name}_t"),
-        ]
+        candidates = image_variants(path, thumbnail=True)
         return self._first_existing_relative(candidates) or candidates[0]
 
-    def get_image_by_time(self, message: Any, sender_wxid: str) -> Optional[Path]:
+    def get_image_by_time(self, message: Any, sender_wxid: str, *, thumb: bool = False) -> Optional[Path]:
         account = self._primary_account
         if not account or not message:
             return None
@@ -604,13 +643,14 @@ class LinuxDatabaseService:
         base = Path(*base_parts)
         candidates: list[Path] = []
         if local_id and create_time:
-            candidates.append(base / f"{local_id}_{create_time}.dat")
+            candidates.extend(image_variants(base / f"{local_id}_{create_time}.dat", thumbnail=thumb)[:2])
         if create_time:
             attach_root = account.account_dir / "msg" / "attach"
-            candidates.extend(
-                path.relative_to(account.account_dir)
-                for path in sorted(attach_root.glob(f"**/*_{create_time}.dat"))
-            )
+            for suffix in (("_t.dat",) if thumb else ("_h.dat", ".dat")):
+                candidates.extend(
+                    path.relative_to(account.account_dir)
+                    for path in sorted(attach_root.glob(f"**/*_{create_time}{suffix}"))
+                )
         return self._first_existing_relative(candidates)
 
     def get_file(self, md5: str) -> Optional[Path]:
@@ -649,6 +689,8 @@ class LinuxDatabaseService:
             "db_count": len(self.get_all_db_files()),
             "key_count": len(self._keys),
             "open_connections": len(self._connections),
+            "connection_replacements": self._connection_replacements,
+            "orphan_wal_snapshots": self._database_files.snapshot_count,
             "message_tables": len(self._message_tables()),
             "contacts": len(self._contact_by_username),
             "rooms": len(self._room_by_md5),
@@ -722,38 +764,68 @@ class LinuxDatabaseService:
     def _has_key(self, path: Path) -> bool:
         return Path(path) in self._keys
 
+    def _file_identity(self, db_path: Path) -> tuple:
+        return self._database_files.identity(db_path)
+
+    def _invalidate_replaced_connection(self, db_path: Path) -> bool:
+        if db_path not in self._connections:
+            return False
+        try:
+            current = self._file_identity(db_path)
+        except OSError:
+            current = None
+        if current == self._connection_identities.get(db_path) and current is not None:
+            return False
+        self._drop_connection(db_path)
+        self._connection_replacements += 1
+        if (db_path.parent.name == "message"
+                and db_path.stem.removeprefix("message_").isdigit()):
+            self._replaced_message_paths.add(db_path)
+        self.logger.warning("Database file replaced or unavailable; invalidated connection: %s", db_path.name)
+        return True
+
     def _connection(self, db_path: Path) -> Any:
         db_path = Path(db_path)
+        self._invalidate_replaced_connection(db_path)
         if db_path in self._connections:
             return self._connections[db_path]
         key = self._keys.get(db_path)
         if not key:
             raise RuntimeError(f"No SQLCipher key for {db_path}")
-        try:
-            conn = self._driver.connect(str(db_path), check_same_thread=False)
-        except TypeError:
-            conn = self._driver.connect(str(db_path))
-        try:
-            conn.execute(f"PRAGMA key = \"x'{key}'\"")
-            conn.execute("PRAGMA busy_timeout = 1000")
-            conn.execute("PRAGMA query_only = ON")
-            conn.execute("select count(*) from sqlite_master").fetchone()
-        except Exception:
+        for attempt in range(2):
+            identity = self._file_identity(db_path)
+            # mode=ro also prevents creating an empty DB if the path disappears
+            # between stat() and connect(). query_only alone cannot prevent that.
+            read_path = self._database_files.read_path(db_path, identity)
+            uri = "file:" + quote(str(read_path.absolute()), safe="/") + "?mode=ro"
+            conn = self._driver.connect(uri, uri=True, check_same_thread=False)
             try:
-                conn.close()
+                conn.execute(f"PRAGMA key = \"x'{key}'\"")
+                conn.execute("PRAGMA busy_timeout = 1000")
+                conn.execute("PRAGMA query_only = ON")
+                conn.execute("select count(*) from sqlite_master").fetchone()
+                if self._file_identity(db_path) != identity:
+                    conn.close()
+                    if attempt:
+                        raise OSError(f"Database changed repeatedly while opening: {db_path.name}")
+                    continue
             except Exception:
-                pass
-            raise
-        self._connections[db_path] = conn
-        return conn
+                conn.close()
+                raise
+            self._connections[db_path] = conn
+            self._connection_identities[db_path] = identity
+            return conn
 
     def _drop_connection(self, db_path: Path) -> None:
-        conn = self._connections.pop(Path(db_path), None)
+        db_path = Path(db_path)
+        self._connection_identities.pop(db_path, None)
+        conn = self._connections.pop(db_path, None)
         if conn:
             try:
                 conn.close()
             except Exception:
                 pass
+        self._database_files.discard(db_path)
 
     def _auto_refresh_after_poll_errors(self) -> None:
         now = time.time()
@@ -836,12 +908,13 @@ class LinuxDatabaseService:
             return 0
 
     def _refresh_message_maps_if_needed(self) -> None:
-        if self.message_map_refresh_interval <= 0:
-            return
+        for path in list(self._connections):
+            self._invalidate_replaced_connection(path)
         now = time.time()
-        if now - self._last_message_map_refresh < self.message_map_refresh_interval:
-            return
-        self.load_message_username_map()
+        periodic = (self.message_map_refresh_interval > 0
+                    and now - self._last_message_map_refresh >= self.message_map_refresh_interval)
+        if self._replaced_message_paths or periodic:
+            self.load_message_username_map()
 
     def _fetch_new_rows(self, db_path: Path, table_name: str) -> list[tuple]:
         last_id = self._table_sequences.get((db_path, table_name), 0)
@@ -928,14 +1001,14 @@ class LinuxDatabaseService:
         dir2 = self._hardlink_dir_name(row[7])
         if not file_name or not dir1 or not dir2:
             return None
-        if thumb and subdir == "Img":
-            path = Path("msg/attach") / dir1 / dir2 / subdir / f"{Path(file_name).stem}_t.dat"
-            existing = self._first_existing_relative([path])
-            if existing:
-                return existing
         path = Path("msg/attach") / dir1 / dir2 / subdir / file_name
-        existing = self._first_existing_relative([path])
-        return existing or path
+        if subdir == "Img":
+            candidates = image_variants(path, thumbnail=thumb)
+            # Full-image queries never disguise a thumbnail as the main path.
+            if not thumb:
+                candidates = candidates[:2]
+            return self._first_existing_relative(candidates) or (candidates[0] if thumb else candidates[-1])
+        return self._first_existing_relative([path]) or path
 
     def _hardlink_dir_name(self, rowid: int) -> str:
         db_path = self._db("hardlink/hardlink.db")
@@ -958,14 +1031,12 @@ class LinuxDatabaseService:
         account = self._primary_account
         if not account:
             return None
-        stem = Path(file_name).stem
-        base_names = [file_name]
-        if "." not in Path(file_name).name:
-            base_names.append(f"{file_name}.dat")
-        if thumb:
-            names = [f"{stem}_t.dat", f"{file_name}_t"]
-        else:
-            names = base_names
+        path = Path(file_name)
+        if not path.suffix:
+            path = path.with_suffix(".dat")
+        names = [p.name for p in image_variants(path, thumbnail=thumb)]
+        if not thumb and path.suffix == ".dat":
+            names = names[:2]
 
         month = ""
         try:
@@ -986,11 +1057,6 @@ class LinuxDatabaseService:
         attach_root = account.account_dir / "msg" / "attach"
         for name in names:
             matches = sorted(attach_root.glob(f"**/{name}"))
-            if matches:
-                return matches[0].relative_to(account.account_dir)
-        if not thumb:
-            matches = sorted(attach_root.glob(f"**/{stem}*.dat"))
-            matches = [path for path in matches if "_t.dat" not in path.name]
             if matches:
                 return matches[0].relative_to(account.account_dir)
         return None

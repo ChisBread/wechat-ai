@@ -38,6 +38,8 @@ for this integration work:
 
 - DbkeyHook: https://github.com/gzygood/DbkeyHook
 - wechat-dump-rs: https://github.com/0xlane/wechat-dump-rs
+- WXGF/HEVC format research: https://www.harvey.eu.org/posts/wxzm
+  (reference for extracting Annex-B data and decoding image previews with FFmpeg).
 - WeChatMsg: https://github.com/LC044/WeChatMsg
 - wechat-dump: https://github.com/ppwwyyxx/wechat-dump
 - WxDatDecrypt: https://github.com/recarto404/WxDatDecrypt

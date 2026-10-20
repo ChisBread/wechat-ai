@@ -4,6 +4,7 @@ import types
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Queue
+from tempfile import TemporaryDirectory
 
 from wechat_ai_bot.services.core.message_service import MessageService
 
@@ -111,7 +112,10 @@ class LinuxDatabaseRecoveryTest(unittest.TestCase):
     def test_execute_query_reopens_connection_once_on_database_error(self):
         service = LinuxDatabaseService(UserInfo(account="me"))
         driver = FakeDriver()
-        db_path = Path("/tmp/message_0.db")
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        db_path = Path(directory.name) / "message_0.db"
+        db_path.touch()
         service._driver = driver
         service._keys[db_path] = "00" * 32
         service._connection(db_path)

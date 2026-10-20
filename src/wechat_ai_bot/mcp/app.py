@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.types import ImageContent, TextContent
 from wechat_ai_bot.clients.mqtt_client import MQTTClient
 from wechat_ai_bot.mcp.debug import add_media_base64, build_debug_status, register_debug_routes
 from wechat_ai_bot.mcp.dispatchers import (
@@ -234,6 +235,21 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
 
     def _json(payload: Any, *, indent: Optional[int] = None) -> str:
         return json.dumps(payload, ensure_ascii=False, indent=indent)
+
+    def _media_tool_result(payload: dict[str, Any]) -> str | list[TextContent | ImageContent]:
+        """Keep metadata in the first text block; expose pixels as image blocks."""
+        images = []
+        for message in payload.get("messages", []):
+            encoded = message.get("base64")
+            mime = message.get("base64_mime_type", "")
+            if encoded and mime.startswith("image/"):
+                # Do not also put image bytes in model-visible JSON text.
+                message.pop("base64")
+                message["image_content_index"] = len(images) + 1
+                images.append(ImageContent(type="image", data=encoded, mimeType=mime))
+        payload["image_count"] = len(images)
+        metadata = _json(payload)
+        return [TextContent(type="text", text=metadata), *images] if images else metadata
 
     def _unavailable_tool(tool_name: str, detail: str) -> str:
         return _json(
@@ -903,7 +919,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         )
         return _json({"status": "ok", "count": len(chats[:bounded_limit]), "chats": chats[:bounded_limit]})
 
-    @mcp.tool()
+    @mcp.tool(structured_output=False)
     @handle_tool_exceptions
     def get_recent_messages(
         ctx: Context,
@@ -911,9 +927,11 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         limit: Optional[int] = 30,
         include_non_text: bool = True,
         parse_media: bool = False,
-    ) -> str:
+    ) -> str | list[TextContent | ImageContent]:
         """
-        Get recent messages for a contact/chatroom. Set parse_media=true to resolve media/file paths.
+        Get recent messages for a contact/chatroom. Set parse_media=true to view images.
+        Returns JSON metadata first, followed by native MCP image blocks for decoded images.
+        image_content_index maps each image message to its content block.
         """
         db = _database_service()
         if not db or not getattr(db, "is_available", False):
@@ -938,7 +956,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 for message in messages
                 if message.get("type") in (MessageType.Text, MessageType.Text2)
             ]
-        return _json(
+        return (_media_tool_result if parse_media else _json)(
             {
                 "status": "ok",
                 "contact": _contact_payload(contact),
@@ -1005,15 +1023,17 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             }
         )
 
-    @mcp.tool()
+    @mcp.tool(structured_output=False)
     @handle_tool_exceptions
     def get_recent_media_messages(
         ctx: Context,
         contact_name: str,
         limit: Optional[int] = 20,
-    ) -> str:
+    ) -> str | list[TextContent | ImageContent]:
         """
-        Get recent non-text messages with best-effort parsed local media/file paths.
+        Get recent non-text messages with parsed media/file paths and decoded pictures.
+        Returns JSON metadata first, followed by native MCP image blocks for vision models.
+        image_content_index maps each image message to its content block.
         """
         db = _database_service()
         if not db or not getattr(db, "is_available", False):
@@ -1036,7 +1056,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             messages.append(_factory_message_payload(db, contact, row))
             if len(messages) >= bounded_limit:
                 break
-        return _json(
+        return _media_tool_result(
             {
                 "status": "ok",
                 "contact": _contact_payload(contact),

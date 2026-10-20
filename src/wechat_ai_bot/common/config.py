@@ -2,6 +2,10 @@
 配置加载与访问模块
 """
 
+import copy
+import os
+import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +19,7 @@ class Config:
     """
 
     def __init__(self, config_path: str = "config.yaml"):
+        self._write_lock = threading.RLock()
         self.config_path = Path(config_path)
         self.config = self._load_config()
 
@@ -56,23 +61,30 @@ class Config:
         return value
 
     def set(self, key: str, value: Any):
-        """
-        设置配置项，支持点号分隔的嵌套访问。
-        """
-        if "." not in key:
-            self.config[key] = value
-            with open(self.config_path, "w", encoding="utf-8") as f:
-                YAML().dump(self.config, f)
-            return
-
-        keys = key.split(".")
-        value = self.config
-        for k in keys:
-            if not isinstance(value, dict):
-                return
-        value[keys[-1]] = value
-        with open(self.config_path, "w", encoding="utf-8") as f:
-            YAML().dump(self.config, f)
+        """Atomically persist a setting before publishing it in memory."""
+        with self._write_lock:
+            updated = copy.deepcopy(self.config)
+            keys = key.split(".")
+            target = updated
+            for part in keys[:-1]:
+                target = target.setdefault(part, {})
+                if not isinstance(target, dict):
+                    raise ValueError("Configuration parent is not a mapping")
+            target[keys[-1]] = value
+            temporary = None
+            try:
+                # NamedTemporaryFile uses mode 0600, including when saving keys.
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                        dir=self.config_path.parent, delete=False) as stream:
+                    temporary = Path(stream.name)
+                    YAML().dump(updated, stream)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, self.config_path)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+            self.config = updated
 
     def __getitem__(self, key: str) -> Any:
         """

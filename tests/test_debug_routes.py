@@ -714,12 +714,10 @@ class DebugRoutesTest(unittest.TestCase):
             recent = client.get("/dashboard/api/messages/recent?username=media", headers=headers)
             payload = recent.json()["messages"][0]
             media = client.get(payload["thumb_path_url"], headers=headers)
-            mcp_payload = json.loads(
-                app._tool_manager._tools["get_recent_messages"].fn(None, "media", 5, True, True)
-            )["messages"][0]
-            mcp_media_payload = json.loads(
-                app._tool_manager._tools["get_recent_media_messages"].fn(None, "media", 5)
-            )["messages"][0]
+            mcp_result = app._tool_manager._tools["get_recent_messages"].fn(None, "media", 5, True, True)
+            mcp_media_result = app._tool_manager._tools["get_recent_media_messages"].fn(None, "media", 5)
+            mcp_payload = json.loads(mcp_result[0].text)["messages"][0]
+            mcp_media_payload = json.loads(mcp_media_result[0].text)["messages"][0]
             expected_base64 = base64.b64encode(png).decode("ascii")
 
             self.assertEqual(recent.status_code, 200)
@@ -728,9 +726,13 @@ class DebugRoutesTest(unittest.TestCase):
             self.assertEqual(payload["thumb_path_url"], "/dashboard/media?path=msg/attach/alice/2026-06/Img/image_t.dat")
             self.assertEqual(payload["base64"], expected_base64)
             self.assertEqual(payload["base64_mime_type"], "image/png")
-            self.assertEqual(mcp_payload["base64"], expected_base64)
+            self.assertNotIn("base64", mcp_payload)
+            self.assertEqual(mcp_result[1].type, "image")
+            self.assertEqual(mcp_result[1].data, expected_base64)
             self.assertEqual(mcp_payload["base64_mime_type"], "image/png")
-            self.assertEqual(mcp_media_payload["base64"], expected_base64)
+            self.assertNotIn("base64", mcp_media_payload)
+            self.assertEqual(mcp_media_result[1].type, "image")
+            self.assertEqual(mcp_media_result[1].data, expected_base64)
             self.assertEqual(mcp_media_payload["base64_mime_type"], "image/png")
             self.assertEqual(payload["thumb_url"], "https://example.test/thumb.gif")
             self.assertEqual(payload["file_size_label"], "2.00 KB")
