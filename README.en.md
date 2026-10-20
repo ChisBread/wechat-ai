@@ -45,10 +45,16 @@ Recommended MCP flow:
 5. Human confirmation
 6. The same write tool without `dry_run`
 
-Ported write tools include `send_text_msg`, `send_file_msg`, `send_pat_msg`,
+Ported write tools include `send_text_msg`, `send_file_msg`, `send_image_msg`, `send_pat_msg`,
 `public_room_announcement`, `leave_room`, `remove_room_member`,
 `invite_room_member`, `rename_room_name`, and `rename_name_in_room`.
 Group-management operations require explicit human confirmation.
+
+`send_image_msg` accepts image base64 or an image data URI in one MCP call, stages
+a temporary file, and sends it as an image through the existing local RPA queue.
+PNG/JPEG/WebP/GIF are supported up to 10 MiB decoded; `dry_run=true` validates
+without writing a file or sending. See the [MCP parameter guide](docs/mcp.md#图片上传与发送)
+for examples, MIME correction, and completion/timeout semantics.
 
 Media notes:
 

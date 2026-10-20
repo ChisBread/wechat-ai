@@ -141,6 +141,7 @@ OpenClaw 或类似支持 MCP JSON 配置的客户端可使用 Streamable HTTP：
 | --- | --- | --- |
 | `send_text_msg` | 文本消息入 RPA 队列并可等待执行结果 | 发送前先用 `dry_run=true` |
 | `send_file_msg` | 发送容器内可访问的本地文件 | `file_path` 必须是容器内路径 |
+| `send_image_msg` | 接收 base64 图片并通过现有 RPA 文件动作按图片发送 | 无需预先上传文件；PNG/JPEG/WebP/GIF，解码后最大 10 MiB |
 | `send_pat_msg` | 对联系人或群成员执行“拍一拍” | 群内拍一拍要求目标头像在当前消息区可见 |
 | `public_room_announcement` | 群公告入 RPA 队列 | 需要账号有群管理权限，真实执行需 `confirm=true` |
 | `leave_room` | 退群操作入 RPA 队列 | 破坏性操作，真实执行需 `confirm=true` |
@@ -200,6 +201,7 @@ MCP 工具参数一律使用 `snake_case`，不要把 Web API、RPA action 或�
 | --- | --- | --- |
 | `send_text_msg` | `recipient_name: str`，`message: str`，`at_user_name: str \| null = null`，`dry_run: bool = false`，`wait_seconds: float = 12` | 给联系人或群聊发文本。群聊 @ 使用 `at_user_name`，不要把 `@成员名` 手写进 `message`。 |
 | `send_file_msg` | `recipient_name: str`，`file_path: str`，`dry_run: bool = false`，`wait_seconds: float = 12` | `file_path` 必须是容器内可读文件路径，例如 `/config/exports/report.pdf`。 |
+| `send_image_msg` | `recipient_name: str`，`image_base64: str`，`mime_type: str \| null = "image/png"`，`file_name: str \| null = null`，`dry_run: bool = false`，`wait_seconds: float \| null = 12` | 支持裸 base64 或 `data:image/png;base64,` 前缀；真实格式以文件头为准，MIME 与扩展名自动纠正。不支持 `at_user_name`。 |
 | `send_pat_msg` | `user_name: str`，`room_name: str \| null = null`，`dry_run: bool = false`，`wait_seconds: float = 12` | 私聊拍一拍只传 `user_name`；群聊拍一拍传 `room_name` 和群内成员 `user_name`。 |
 | `public_room_announcement` | `room_name: str`，`content: str`，`force_edit: bool = false`，`confirm: bool = false` | 发布或编辑群公告；真实执行必须 `confirm=true`。 |
 | `leave_room` | `room_name: str`，`confirm: bool = false` | 退群；真实执行必须 `confirm=true`。 |
@@ -207,6 +209,46 @@ MCP 工具参数一律使用 `snake_case`，不要把 Web API、RPA action 或�
 | `invite_room_member` | `room_name: str`，`user_name: str`，`dry_run: bool = false`，`wait_seconds: float = 12`，`confirm: bool = false` | 邀请联系人进群；真实执行必须 `confirm=true`。 |
 | `rename_room_name` | `room_name: str`，`new_name: str`，`dry_run: bool = false`，`wait_seconds: float = 25`，`confirm: bool = false` | 修改群名；真实执行必须 `confirm=true`。 |
 | `rename_name_in_room` | `room_name: str`，`new_name_in_room: str`，`dry_run: bool = false`，`wait_seconds: float = 25`，`confirm: bool = false` | 修改当前账号在群里的昵称；真实执行必须 `confirm=true`。 |
+
+### 图片上传与发送
+
+调用端持有图片 bytes 时，先编码为 base64 字符串，再调用 `send_image_msg`，无需访问容器文件系统。工具复用 `SendFileAction`，微信会按图片渲染；收件人和群聊使用与 `send_file_msg` 相同的解析规则。
+
+下面用一张很小的 PNG 演示裸 base64 和 dry run。此调用只校验图片并解析目标，不落盘、不入队，也不要求开启写开关：
+
+```json
+{
+  "tool": "send_image_msg",
+  "arguments": {
+    "recipient_name": "测试群",
+    "image_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC",
+    "mime_type": "image/png",
+    "file_name": "example.png",
+    "dry_run": true
+  }
+}
+```
+
+确认目标后，开启 `WECHAT_AI_MCP_WRITE_ENABLED=true` 并发送。也可以传 data URI：
+
+```json
+{
+  "tool": "send_image_msg",
+  "arguments": {
+    "recipient_name": "测试群",
+    "image_base64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC",
+    "file_name": "example.png",
+    "wait_seconds": 12
+  }
+}
+```
+
+- 图片解码后必须非空，最大 **10 MiB（10,485,760 字节）**。只接受标准 base64（不接受中间换行或 URL-safe base64），支持 PNG/JPEG/WebP/GIF 文件头；空数据、非法编码、超限和不支持的格式返回 JSON `status=invalid_request`。必填参数缺失会由 MCP 参数校验拒绝。
+- `mime_type`、data URI 的 MIME 和 `file_name` 后缀仅作为提示，实际 MIME 和扩展名以图片文件头为准。不会缩放或转码上传内容；文件头校验不保证损坏的图片能被微信解码。
+- 返回 JSON 包含 `recipient_name`、`resolved`、`image: {mime_type, bytes, file_name}`、`dry_run`、`queued`、`completed`、`result` 和 `wait_seconds`。`image.file_name` 是去掉路径并纠正扩展名后的展示名称；磁盘文件名使用 UUID，不使用调用端提供的路径。
+- 真实发送要求本地 RPA 队列，无法访问本地临时文件的远程 dispatcher 返回 `unavailable`。未开启写开关返回 `blocked`。
+- `wait_seconds` 默认 12 秒，范围为 0–60 秒；`null` 使用默认值，`0` 只入队。`queued` 或 `timeout` 均不代表已发送，也不会取消队列任务；不要盲目重试，以免重复发送。`executed` 且 `completed=true`、`result.ok=true` 表示本地 RPA 执行成功，不是对方已读回执。
+- 图片暂存于系统临时目录下的 `wechat_ai_send_images_*` 目录。入队前失败立即清理；入队后由 RPA 执行结束的 `finally` 清理，包括执行失败和异常。等待超时也会保留文件直到执行结束，避免微信读取时文件已被删除。
 
 ### 群聊 @ 协议
 

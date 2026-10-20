@@ -89,18 +89,28 @@ class RPAService:
 
                 if task:
                     self.logger.debug(f"Processing RPA action: {task.action_type.name}")
-                    # 将任务交给RPAController执行
-                    success = self.controller.execute_action(task)
-                    result_queue = getattr(task, "result_queue", None)
-                    if result_queue is not None:
-                        result_queue.put(
-                            {
-                                "ok": bool(success),
-                                "action_type": task.action_type.value,
-                                "finished_at": time.time(),
-                            }
-                        )
-                    self.task_queue.task_done()
+                    result = {"ok": False, "action_type": task.action_type.value}
+                    try:
+                        result["ok"] = bool(self.controller.execute_action(task))
+                    except Exception:
+                        self.logger.exception("RPA action failed")
+                        result["error"] = "RPA execution raised an exception"
+                    finally:
+                        try:
+                            cleanup = getattr(task, "on_complete", None)
+                            if cleanup is not None:
+                                cleanup()
+                        except Exception:
+                            self.logger.exception("RPA action cleanup failed")
+                        finally:
+                            task.on_complete = None
+                            result["finished_at"] = time.time()
+                            try:
+                                result_queue = getattr(task, "result_queue", None)
+                                if result_queue is not None:
+                                    result_queue.put_nowait(result)
+                            finally:
+                                self.task_queue.task_done()
 
             except Empty:
                 # 队列为空是正常情况，继续循环以检查 is_running 状态
