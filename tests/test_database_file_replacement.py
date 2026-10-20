@@ -67,6 +67,25 @@ def replace_database(driver, path, users=None, key=KEY):
     os.replace(replacement, path)
 
 
+def test_send_verification_discovers_new_conversation_without_periodic_refresh(database):
+    service, driver, path = database
+    assert service.get_messages_by_username("first-chat", refresh_if_missing=True) == []
+    writer = driver.connect(str(path))
+    try:
+        writer.execute(f'PRAGMA key="x\'{KEY}\'"')
+        writer.execute("INSERT INTO Name2Id VALUES (?)", ("first-chat",))
+        writer.execute(f"CREATE TABLE {table_for('first-chat')} (" +
+                       ",".join(f'"{c}"' for c in MESSAGE_COLUMNS) + ")")
+        insert_message(writer, "first-chat", 1)
+        writer.commit()
+    finally:
+        writer.close()
+    assert service.get_messages_by_username("first-chat") == []
+    assert len(service.get_messages_by_username("first-chat", refresh_if_missing=True)) == 1
+    # Confirming a send does not consume rows from existing chats.
+    assert service._table_sequences[(path, table_for("alice"))] == 1
+
+
 @pytest.mark.parametrize('reader', ['poll', 'mcp'])
 def test_replacement_recovers_without_errors_or_rescan_and_preserves_offsets(database, reader):
     service, driver, path = database

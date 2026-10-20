@@ -26,8 +26,8 @@
 
 - MCP endpoint 必须带 `Authorization: Bearer <WECHAT_AI_MCP_TOKEN>`；401 表示 token 未配置、仍是默认值或客户端未带 header。
 - 写工具返回 `status: "executed"` 才表示已执行完成。
-- `status: "queued"` 只表示消息已入队；`status: "timeout"` 表示无法确认执行结果。
+- 文本/图片/文件还需 `result.verified=true` 才能宣称发送成功。`queued` / `timeout` 后按 `action_id` 调用 `get_rpa_result` 查询原任务，不重新提交。
 - `status: "blocked"` 表示 MCP 安全开关未开启，不要重试执行；请提示用户检查环境变量。
 - `status: "confirmation_required"` 表示必须先取得人类明确确认，并在下一次调用中传 `confirm=true`。
-- `status: "unavailable"` 或 `status: "failed"` 是硬失败。
+- `status: "unavailable"` 或 `status: "failed"` 表示执行或核验失败。展示错误原因，先回查最近消息，禁止自动重发；未确认的消息可能稍后出现。
 - 除非用户明确要求，不调用 `leave_room`、`public_room_announcement`、`remove_room_member`、`invite_room_member`、`rename_room_name` 或 `rename_name_in_room`。

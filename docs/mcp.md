@@ -142,6 +142,7 @@ OpenClaw 或类似支持 MCP JSON 配置的客户端可使用 Streamable HTTP：
 | `send_text_msg` | 文本消息入 RPA 队列并可等待执行结果 | 发送前先用 `dry_run=true` |
 | `send_file_msg` | 发送容器内可访问的本地文件 | `file_path` 必须是容器内路径 |
 | `send_image_msg` | 接收 base64 图片并通过现有 RPA 文件动作按图片发送 | 无需预先上传文件；PNG/JPEG/WebP/GIF，解码后最大 10 MiB |
+| `get_rpa_result` | 按 `action_id` 查询原任务结果，不重新提交 | 用于 `queued` / `timeout` 后确认最终状态 |
 | `send_pat_msg` | 对联系人或群成员执行“拍一拍” | 群内拍一拍要求目标头像在当前消息区可见 |
 | `public_room_announcement` | 群公告入 RPA 队列 | 需要账号有群管理权限，真实执行需 `confirm=true` |
 | `leave_room` | 退群操作入 RPA 队列 | 破坏性操作，真实执行需 `confirm=true` |
@@ -247,7 +248,11 @@ MCP 工具参数一律使用 `snake_case`，不要把 Web API、RPA action 或�
 - `mime_type`、data URI 的 MIME 和 `file_name` 后缀仅作为提示，实际 MIME 和扩展名以图片文件头为准。不会缩放或转码上传内容；文件头校验不保证损坏的图片能被微信解码。
 - 返回 JSON 包含 `recipient_name`、`resolved`、`image: {mime_type, bytes, file_name}`、`dry_run`、`queued`、`completed`、`result` 和 `wait_seconds`。`image.file_name` 是去掉路径并纠正扩展名后的展示名称；磁盘文件名使用 UUID，不使用调用端提供的路径。
 - 真实发送要求本地 RPA 队列，无法访问本地临时文件的远程 dispatcher 返回 `unavailable`。未开启写开关返回 `blocked`。
-- `wait_seconds` 默认 12 秒，范围为 0–60 秒；`null` 使用默认值，`0` 只入队。`queued` 或 `timeout` 均不代表已发送，也不会取消队列任务；不要盲目重试，以免重复发送。`executed` 且 `completed=true`、`result.ok=true` 表示本地 RPA 执行成功，不是对方已读回执。
+- `wait_seconds` 默认 12 秒，范围为 0–60 秒；`null` 使用默认值，`0` 只入队。`queued` 或 `timeout` 均不代表已发送，也不会取消队列任务；用返回的 `action_id` 调用 `get_rpa_result` 查询原任务，禁止自动重发。`executed` 且 `completed=true`、`result.ok=true`、`result.verified=true` 表示已在目标会话的数据库中确认新外发消息，不是对方已读回执。
+
+文本、图片和文件的所有 RPA 入口（MCP、Dashboard、MQTT、插件队列）统一进行发送核验：发送前记录会话消息基线，点击发送后最多轮询数据库 10 秒，要求当前账号发出的新增消息具备服务器 ID，文本完整匹配或媒体 MD5 匹配。旧消息、他人消息、仅有本地 ID 的待发送记录都不能作为成功依据。数据库不可用或目标无法唯一解析时不执行发送；发送后超时、读取失败或内容无法匹配时返回 `failed`、错误原因及 `retryable=false`。微信转码导致媒体哈希不同也会保守返回 `failed`，需人工查看最近消息，不能据此自动重发。
+
+`get_rpa_result(action_id)` 返回 `queued`、`running`、`executed`、`failed` 或 `unknown`。结果仅在内存保留最近 1000 个任务，进程重启或结果过期后为 `unknown`；此时也应先查最近消息，不能把结果缺失当作未发送。
 - 图片暂存于系统临时目录下的 `wechat_ai_send_images_*` 目录。入队前失败立即清理；入队后由 RPA 执行结束的 `finally` 清理，包括执行失败和异常。等待超时也会保留文件直到执行结束，避免微信读取时文件已被删除。
 
 ### 群聊 @ 协议
@@ -294,10 +299,10 @@ MCP 工具参数一律使用 `snake_case`，不要把 Web API、RPA action 或�
 | --- | --- | --- |
 | `ok` | 读取或运维工具成功。 | 可以使用返回数据继续任务。 |
 | `dry_run` | 写操作只完成目标解析，没有执行。 | 展示 `resolved`、`action_data`、`message_preview` 给人确认。 |
-| `queued` | 动作已进入 RPA 队列，但没有确认执行完成。 | 不要直接宣称成功；可查看日志、状态或等待用户确认。 |
-| `executed` | RPA 返回完成，并且 `result.ok=true`。 | 可以说明操作已执行。 |
-| `failed` | RPA 返回完成，但执行失败。 | 把 `result.reason` / `result.error` 展示给用户，不要自动重复高风险操作。 |
-| `timeout` | 动作已提交，但等待超时。 | 不要盲目重试发送，先检查微信界面、队列和日志，避免重复操作。 |
+| `queued` / `running` | 动作已进入队列或正在执行，尚未确认完成。 | 按 `action_id` 查询 `get_rpa_result`，不要重新提交。 |
+| `executed` | RPA 返回完成，并且 `result.ok=true`；文本/图片/文件还必须通过数据库核验。 | 可以说明操作已执行。 |
+| `failed` | RPA 执行或发送核验失败。 | 展示 `result.error` 和 `guidance`；不要自动重发，未确认消息可能稍后出现。 |
+| `timeout` | 动作已提交，但等待超时。 | 查询 `get_rpa_result(action_id)`，不要重新发送。 |
 | `blocked` | MCP 安全开关未开启。 | 提示用户检查 `WECHAT_AI_MCP_ADMIN_ENABLED` 或 `WECHAT_AI_MCP_WRITE_ENABLED`。 |
 | `confirmation_required` | 高影响操作缺少 `confirm=true`。 | 先向人类确认，确认后再带 `confirm=true` 调用。 |
 | `invalid_request` | 参数缺失或不合法。 | 修正参数名、路径、目标名后重试。 |

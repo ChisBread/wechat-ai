@@ -129,9 +129,11 @@ def test_send_file_action_and_cleanup_after_worker_completion(upload, recipient,
         assert path.parent.stat().st_mode & 0o111 == 0o111
         if outcome == 'exception':
             raise RuntimeError('synthetic controller failure')
+        action.execution_result = {"verified": outcome}
         return outcome
 
     service = RPAService(upload.bot.rpa_task_queue, SimpleNamespace(execute_action=execute))
+    upload.bot.rpa_service = service
     service.start()
     try:
         result = upload.call(recipient_name=recipient, wait_seconds=3)
@@ -140,6 +142,10 @@ def test_send_file_action_and_cleanup_after_worker_completion(upload, recipient,
     assert result['status'] == ('executed' if outcome is True else 'failed')
     assert result['queued'] and result['completed'] and not result['dry_run']
     assert result['result']['ok'] == (outcome is True)
+    saved = json.loads(upload.app._tool_manager._tools['get_rpa_result'].fn(
+        upload.ctx, result['action_id']))
+    assert saved['status'] == result['status']
+    assert saved['ok'] == result['result']['ok']
     action, content = observed[0]
     assert content == image_bytes()
     assert action.target == target and action.is_chatroom == is_room

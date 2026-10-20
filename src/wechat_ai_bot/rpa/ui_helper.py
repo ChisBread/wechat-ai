@@ -396,7 +396,7 @@ class UIInteractionHelper:
         """
         查找并点击发送按钮。
         Returns:
-            bool: 是否成功。
+            bool: 是否已点击；不代表消息已发送，外发消息需由 RPAController 核验。
         """
         send_button = self.controller.window_manager.get_icon_position("send_button")
         if send_button:

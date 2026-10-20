@@ -6,10 +6,12 @@ RPA 服务模块。
 import logging
 import threading
 import time
+from collections import OrderedDict
 from queue import Empty, Queue
 from typing import TYPE_CHECKING, Optional
 
 from wechat_ai_bot.rpa.rpa_action import RPAAction
+from wechat_ai_bot.rpa.send_verifier import NO_RETRY, SEND_ACTIONS
 
 if TYPE_CHECKING:
     from wechat_ai_bot.rpa.controller import RPAController
@@ -39,6 +41,30 @@ class RPAService:
         # --- 2. 初始化自身状态 ---
         self.is_running: bool = False
         self.thread: Optional[threading.Thread] = None
+        self._results = OrderedDict()
+        self._results_lock = threading.Lock()
+
+    def track_action(self, action):
+        self._save_result(action.action_id, {
+            "action_id": action.action_id, "status": "queued", "completed": False,
+            "action_type": action.action_type.value, "retryable": False, "guidance": NO_RETRY,
+        })
+
+    def _save_result(self, action_id, result):
+        with self._results_lock:
+            self._results[action_id] = dict(result)
+            self._results.move_to_end(action_id)
+            while len(self._results) > 1000:
+                self._results.popitem(last=False)
+
+    def get_result(self, action_id):
+        with self._results_lock:
+            result = self._results.get(action_id)
+            return dict(result) if result is not None else {
+                "action_id": action_id, "status": "unknown", "completed": False,
+                "retryable": False,
+                "guidance": "Result missing or expired. Check recent messages before considering another send.",
+            }
 
     def start(self):
         """
@@ -89,11 +115,23 @@ class RPAService:
 
                 if task:
                     self.logger.debug(f"Processing RPA action: {task.action_type.name}")
-                    result = {"ok": False, "action_type": task.action_type.value}
+                    result = {
+                        "ok": False, "action_id": task.action_id,
+                        "action_type": task.action_type.value,
+                        "retryable": False, "guidance": NO_RETRY,
+                    }
+                    self._save_result(task.action_id, {**result, "status": "running", "completed": False})
                     try:
                         result["ok"] = bool(self.controller.execute_action(task))
+                        result.update(task.execution_result)
+                        if task.action_type in SEND_ACTIONS and not result.get("verified"):
+                            result["ok"] = False
+                            result.setdefault("error", "Send was not verified in the database")
+                        if not result["ok"]:
+                            result.setdefault("error", "RPA execution failed")
                     except Exception:
                         self.logger.exception("RPA action failed")
+                        result["ok"] = False
                         result["error"] = "RPA execution raised an exception"
                     finally:
                         try:
@@ -105,6 +143,14 @@ class RPAService:
                         finally:
                             task.on_complete = None
                             result["finished_at"] = time.time()
+                            result["status"] = "executed" if result["ok"] else "failed"
+                            result["completed"] = True
+                            self._save_result(task.action_id, result)
+                            if not result["ok"]:
+                                self.logger.error(
+                                    "RPA action %s failed: %s. %s",
+                                    task.action_id, result.get("error"), NO_RETRY,
+                                )
                             try:
                                 result_queue = getattr(task, "result_queue", None)
                                 if result_queue is not None:

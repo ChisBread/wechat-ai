@@ -445,12 +445,16 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
             return JSONResponse({"ok": False, "error": "rpa queue unavailable"}, status_code=503)
         result_queue = Queue(maxsize=1) if wait_seconds > 0 else None
         action = SendTextMessageAction(
+            target_username=contact.username if contact else "",
             content=content,
             target=resolved_target,
             is_chatroom=bool(contact and contact.is_chatroom),
             at_user_name=at_user_name,
             result_queue=result_queue,
         )
+        service = getattr(bot, "rpa_service", None)
+        if service is not None:
+            service.track_action(action)
         queue.put(action)
         result = None
         if result_queue is not None:
@@ -462,7 +466,9 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
             return JSONResponse(
                 {
                     "ok": bool(result.get("ok")),
-                    "error": "" if result.get("ok") else "RPA action failed",
+                    "error": "" if result.get("ok") else result.get("error", "RPA action failed"),
+                    "action_id": action.action_id,
+                    "status": "executed" if result.get("ok") else "failed",
                     "queued": True,
                     "completed": True,
                     "target": resolved_target,
@@ -475,6 +481,10 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         return JSONResponse(
             {
                 "ok": True,
+                "action_id": action.action_id,
+                "status": "timeout" if result_queue is not None else "queued",
+                "retryable": False,
+                "guidance": "Query get_rpa_result(action_id); do not automatically resend.",
                 "queued": True,
                 "completed": False,
                 "target": resolved_target,

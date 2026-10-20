@@ -21,6 +21,7 @@ class DummyController:
 
     def execute_action(self, action):
         self.actions.append(action)
+        action.execution_result = {"verified": self.result}
         return self.result
 
 

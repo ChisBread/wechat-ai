@@ -1178,6 +1178,20 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
 
     @mcp.tool()
     @handle_tool_exceptions
+    def get_rpa_result(ctx: Context, action_id: str) -> str:
+        """Read the original RPA task result after queued/timeout; never resubmit it.
+
+        executed means text/image/file sends passed database verification.
+        failed or unknown must not trigger an automatic resend: check recent
+        messages first. Results are in memory (the latest 1000 tasks).
+        """
+        service = getattr(bot, "rpa_service", None)
+        if service is None:
+            return _unavailable_tool("get_rpa_result", "Local RPA result service is unavailable")
+        return _json(service.get_result(str(action_id)))
+
+    @mcp.tool()
+    @handle_tool_exceptions
     def send_text_msg(
         ctx: Context,
         recipient_name: str,
@@ -1190,6 +1204,9 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         Send a text message to a user or group via RPA.
         Supports @mention in groups. Set dry_run=true to resolve the target without sending.
         wait_seconds controls whether the local RPA execution result is awaited.
+        Only executed confirms a database-verified send. For queued/timeout,
+        query get_rpa_result(action_id). On failed, inspect recent messages;
+        never automatically resend an unconfirmed message.
         """
         message = str(message or "")
         if not message:
@@ -1266,6 +1283,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         resolved = _resolve_rpa_target(recipient_name)
         action_data = {
             "target": resolved["target"],
+            "target_username": resolved["username"],
             "file_path": str(path.resolve()),
             "is_chatroom": bool(resolved["is_chatroom"]),
         }
@@ -1300,6 +1318,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         PNG/JPEG/WebP/GIF signatures override MIME and filename extension hints.
         dry_run validates without writing files or queueing. A timeout does not
         cancel the send: the worker retains the file until execution finishes.
+        Query get_rpa_result(action_id) after queued/timeout. A failed result
+        must not trigger an automatic resend; check recent messages first.
         """
         if not str(recipient_name or "").strip():
             return _json({"status": "invalid_request", "message": "recipient_name is required"})
@@ -1320,7 +1340,10 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             "result": None,
             "wait_seconds": _bounded_float(wait_seconds, 12, 0, 60),
         }
-        action_data = {"target": resolved["target"], "is_chatroom": bool(resolved["is_chatroom"])}
+        action_data = {
+            "target": resolved["target"], "target_username": resolved["username"],
+            "is_chatroom": bool(resolved["is_chatroom"]),
+        }
         if dry_run:
             return _dispatch_rpa_tool(
                 ctx, tool_name="send_image_msg",

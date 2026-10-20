@@ -8,6 +8,7 @@ from datetime import datetime
 from enum import Enum
 from queue import Queue
 from typing import Any, Callable, Dict
+from uuid import uuid4
 
 
 class RPAActionType(Enum):
@@ -47,6 +48,9 @@ class RPAAction:
     action_type: RPAActionType = field(default=None, init=False)
     timestamp: datetime = field(default_factory=datetime.now, init=False)
     is_send_message: bool = field(default=None, init=False)
+    action_id: str = field(default_factory=lambda: uuid4().hex, init=False)
+    target_username: str = field(default="", kw_only=True)
+    execution_result: Dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     result_queue: Queue | None = field(
         default=None,
         repr=False,
