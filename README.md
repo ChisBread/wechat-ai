@@ -139,6 +139,7 @@ WECHAT_AI_MCP_WRITE_ENABLED=true   # 允许 send_text_msg、send_file_msg、群�
 - `send_text_msg`：发送文本消息。参数是 `recipient_name`、`message`、可选 `at_user_name`；群聊 @ 不要手写进正文，应该传 `at_user_name`。默认会等待本地 RPA 执行结果；传 `wait_seconds=0` 可只入队不等待。
 - `send_file_msg`：发送容器内可访问的本地文件。
 - `send_image_msg`：直接接收图片 base64（也支持 data URI），由服务端临时落盘并按图片发送；支持 PNG/JPEG/WebP/GIF，解码后最大 10 MiB，可先用 `dry_run=true` 校验。
+- `get_rpa_result`：按发送返回的 `action_id` 查询原任务状态。文本/图片/文件只有回查数据库确认新增外发内容后才返回 `executed`；核验失败返回 `failed`。`queued` / `timeout` 后应查询原任务，禁止自动重发，避免重复消息。
 - `send_pat_msg`：对联系人或群内成员执行“拍一拍”。
 - `public_room_announcement`：发布或编辑群公告。
 - `leave_room`：退群。

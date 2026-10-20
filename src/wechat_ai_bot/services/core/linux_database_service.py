@@ -296,9 +296,18 @@ class LinuxDatabaseService:
         username: str,
         count: int = 10,
         order: str = "desc",
+        *,
+        refresh_if_missing: bool = False,
     ) -> list[tuple]:
         result: list[tuple] = []
-        for db_path in self.get_db_path_by_username(username):
+        paths = self.get_db_path_by_username(username)
+        if not paths and refresh_if_missing:
+            # A first send can create a conversation table after our cached
+            # map was loaded. Verification cannot wait for the periodic refresh.
+            with self._lock:
+                self.load_message_username_map()
+                paths = sorted(self._message_username_map.get(username, set()))
+        for db_path in paths:
             table = self._table_for_username(db_path, username)
             if not table:
                 continue

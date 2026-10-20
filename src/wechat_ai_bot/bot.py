@@ -124,6 +124,7 @@ class Bot:
         )
 
         # RPA service (portable)
+        self.rpa_controller.db = self.database_service
         self.rpa_service = RPAService(self.rpa_task_queue, self.rpa_controller)
 
         # Database message service (preferred) and visual fallback.

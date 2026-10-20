@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 from threading import Lock
 
 from wechat_ai_bot.rpa.rpa_action import RPAAction, RPAActionType
+from wechat_ai_bot.rpa.send_verifier import NO_RETRY, SEND_ACTIONS, SendVerifier
 from .image_processor import ImageProcessor
 from .linux_input_handler import LinuxInputHandler  # stub, Wayland uses pyautogui directly
 from .xfce_window_manager import XFCEWindowManager as LinuxWindowManager
@@ -57,7 +58,7 @@ class RPAController:
         ocr_processor: OCRProcessor,
         image_processor: ImageProcessor,
         rpa_config: dict,
-        db=None,  # Optional: for future DB integration
+        db=None,
     ):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.db = db
@@ -138,6 +139,12 @@ class RPAController:
 
     def execute_action(self, action: RPAAction) -> bool:
         """Execute an RPA action, dispatching to the appropriate handler."""
+        requires_verification = action.action_type in SEND_ACTIONS
+        action.execution_result = {}
+        if requires_verification:
+            action.execution_result.update(
+                verified=False, send_attempted=False, retryable=False, guidance=NO_RETRY,
+            )
         handler = self.action_handlers.get(action.action_type)
         if handler is None:
             self.logger.error(f"No handler registered for: {action.action_type}")
@@ -163,9 +170,20 @@ class RPAController:
                 return False
 
             self.logger.info(f"Executing RPA action: {action.action_type.name}")
+            verifier = None
+            if requires_verification:
+                verifier = SendVerifier(self.db)
+                verifier.prepare(action)
+                action.execution_result["send_attempted"] = True
             success = handler.execute(action)
+            if success and verifier is not None:
+                action.execution_result.update(verifier.verify(action))
+            elif not success and requires_verification:
+                action.execution_result["error"] = "RPA send action failed; delivery is unconfirmed"
             self.logger.info(f"RPA action {action.action_type.name}: {'OK' if success else 'FAILED'}")
             return success
         except Exception as e:
+            if requires_verification:
+                action.execution_result["error"] = str(e)
             self.logger.error(f"Unhandled error in {action.action_type.name}: {e}", exc_info=True)
             return False

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict
 
 from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.rpa.rpa_action import RPAActionType
+from wechat_ai_bot.rpa.send_verifier import NO_RETRY
 from wechat_ai_bot.weixin.message_classes import MessageType
 
 if TYPE_CHECKING:
@@ -74,6 +75,9 @@ class QueueCommandDispatcher:
         if on_queued is not None:
             on_queued()
         response: Dict[str, Any] = {
+            "action_id": action.action_id,
+            "retryable": False,
+            "guidance": NO_RETRY,
             "status": "queued",
             "queued": True,
             "completed": False,
@@ -112,6 +116,7 @@ class QueueCommandDispatcher:
 
             at_list = payload.get("at_list") or []
             return SendTextMessageAction(
+                target_username=str(payload.get("username") or ""),
                 content=str(payload.get("message_content") or ""),
                 target=str(payload.get("nickname") or payload.get("target") or ""),
                 is_chatroom=bool(payload.get("is_chatroom")),
@@ -121,6 +126,7 @@ class QueueCommandDispatcher:
             from wechat_ai_bot.rpa.action_handlers import SendFileAction
 
             return SendFileAction(
+                target_username=str(payload.get("username") or ""),
                 file_path=str(
                     payload.get("file_path")
                     or payload.get("path")
@@ -179,6 +185,7 @@ class QueueCommandDispatcher:
 
             target = value("target", "nickname", "recipient_name", "room_name")
             return SendFileAction(
+                target_username=value("target_username", "username"),
                 file_path=value("file_path", "path", "file_url", "url"),
                 target=target,
                 is_chatroom=bool(
@@ -251,6 +258,9 @@ class QueueCommandDispatcher:
         queue = getattr(self.bot, "rpa_task_queue", None)
         if queue is None:
             raise RuntimeError("RPA task queue is unavailable.")
+        service = getattr(self.bot, "rpa_service", None)
+        if service is not None:
+            service.track_action(action)
         queue.put(action)
 
     def _queue_size(self) -> int:
@@ -327,6 +337,8 @@ class MqttCommandDispatcher:
             "completed": False,
             "dispatcher": type(self).__name__,
             "wait_supported": False,
+            "retryable": False,
+            "guidance": "Remote execution is unconfirmed. Check recent messages; do not automatically resend.",
             "message": "MQTT dispatcher cannot wait for local RPA completion.",
         }
 
@@ -357,5 +369,7 @@ class MqttCommandDispatcher:
             "completed": False,
             "dispatcher": type(self).__name__,
             "wait_supported": False,
+            "retryable": False,
+            "guidance": "Remote execution is unconfirmed. Check recent messages; do not automatically resend.",
             "message": message,
         }

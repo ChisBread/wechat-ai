@@ -47,7 +47,7 @@ class MessageSender:
             clear_input_box (bool): 是否先清空输入框。
             activate_input_box (bool): 是否先激活输入框。
         Returns:
-            bool: 是否发送成功。
+            bool: 是否已执行发送点击；实际发送成功由 RPAController 回查数据库确认。
         """
         try:
             if activate_input_box and not self.window_manager.activate_input_box():
