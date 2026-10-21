@@ -251,6 +251,11 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 message.pop("base64")
                 message["image_content_index"] = len(images) + 1
                 images.append(ImageContent(type="image", data=encoded, mimeType=mime))
+            quote_encoded = message.pop("quote_base64", None)
+            quote_mime = message.get("quote_base64_mime_type", "")
+            if quote_encoded and quote_mime.startswith("image/"):
+                message["quote_image_content_index"] = len(images) + 1
+                images.append(ImageContent(type="image", data=quote_encoded, mimeType=quote_mime))
         payload["image_count"] = len(images)
         metadata = _json(payload)
         return [TextContent(type="text", text=metadata), *images] if images else metadata
@@ -623,6 +628,40 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 continue
             payload[key] = str(value) if isinstance(value, Path) else value
         add_media_base64(db, payload)
+        quote = getattr(message, "quote_message", None)
+        if quote is not None:
+            quote_type = getattr(quote, "local_type", None)
+            quote_contact = getattr(quote, "contact", None)
+            quote_text = ""
+            try:
+                quote_text = _truncate_text(str(quote.to_text() or ""), 2000)
+            except Exception:
+                pass
+            payload["quote"] = {
+                "local_id": getattr(quote, "local_id", None),
+                "server_id": str(getattr(quote, "server_id", "") or ""),
+                "type": quote_type,
+                "type_name": _message_type_name(quote_type),
+                "sender_username": getattr(quote_contact, "username", "") or "",
+                "sender_display": getattr(quote_contact, "display_name", "") or "",
+                "text": quote_text,
+            }
+            if quote_type in (MessageType.Image, MessageType.Emoji):
+                try:
+                    quote_payload = {"type": quote_type}
+                    for key in ("path", "thumb_path", "md5"):
+                        if hasattr(quote, key):
+                            value = getattr(quote, key)
+                            quote_payload[key] = str(value) if isinstance(value, Path) else value
+                    add_media_base64(db, quote_payload)
+                    quote_encoded = quote_payload.get("base64")
+                    quote_mime = quote_payload.get("base64_mime_type", "")
+                    if quote_encoded and quote_mime.startswith("image/"):
+                        payload["quote_base64"] = quote_encoded
+                        payload["quote_base64_mime_type"] = quote_mime
+                except Exception:
+                    # Keep quote metadata even when the media cannot be decoded.
+                    pass
         return payload
 
     def _window_status_payload(window_manager: Any) -> dict[str, Any]:
@@ -951,7 +990,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         """
         Get recent messages for a contact/chatroom. Set parse_media=true to view images.
         Returns JSON metadata first, followed by native MCP image blocks for decoded images.
-        image_content_index maps each image message to its content block.
+        image_content_index and quote_image_content_index map images to their content blocks.
         """
         db = _database_service()
         if not db or not getattr(db, "is_available", False):
@@ -1053,7 +1092,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         """
         Get recent non-text messages with parsed media/file paths and decoded pictures.
         Returns JSON metadata first, followed by native MCP image blocks for vision models.
-        image_content_index maps each image message to its content block.
+        image_content_index and quote_image_content_index map images to their content blocks.
         """
         db = _database_service()
         if not db or not getattr(db, "is_available", False):
