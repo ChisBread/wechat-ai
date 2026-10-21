@@ -50,6 +50,13 @@ Ported write tools include `send_text_msg`, `send_file_msg`, `send_image_msg`, `
 `invite_room_member`, `rename_room_name`, and `rename_name_in_room`.
 Group-management operations require explicit human confirmation.
 
+Contact and group metadata refresh automatically with the periodic message-map
+refresh (30 seconds by default). Missing MCP contacts trigger a refresh and retry,
+with metadata reloads throttled to once every 10 seconds; an explicit forced
+refresh bypasses this limit. This reuses open databases without rescanning keys
+or resetting message sequences. Text, file, and image sends return `not_found`
+for unresolved contacts without queueing an action.
+
 `send_image_msg` accepts image base64 or an image data URI in one MCP call, stages
 a temporary file, and sends it as an image through the existing local RPA queue.
 PNG/JPEG/WebP/GIF are supported up to 10 MiB decoded; `dry_run=true` validates

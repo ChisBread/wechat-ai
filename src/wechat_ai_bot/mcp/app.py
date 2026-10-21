@@ -333,18 +333,21 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 "is_chatroom": is_chatroom,
                 "contact": _contact_payload(contact),
             }
-        is_chatroom = raw_name.endswith("@chatroom") or "群" in raw_name or "group" in raw_name.lower()
-        username = hashlib.md5(raw_name.encode()).hexdigest() if raw_name else ""
-        if username and is_chatroom:
-            username += "@chatroom"
         return {
+            "error": "contact_not_found",
             "input": raw_name,
-            "username": username,
-            "display_name": raw_name,
-            "target": raw_name,
-            "is_chatroom": is_chatroom,
-            "contact": None,
+            "message": "Contact or group not found after refreshing contact metadata",
         }
+
+    def _rpa_target_not_found(resolved: dict[str, Any]) -> str:
+        return _json({
+            "status": "not_found",
+            "error": resolved["error"],
+            "message": resolved["message"],
+            "resolved": resolved,
+            "queued": False,
+            "completed": False,
+        })
 
     def _dispatch_rpa_tool(
         ctx: Context,
@@ -415,9 +418,10 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         db = _database_service()
         if not db or not getattr(db, "is_available", False):
             return None
-        contact = db.get_contact_by_username(name)
+        contact = db.ensure_contact(name)
         if contact:
             return contact
+        db.refresh_contact_metadata()
         matches = db.get_contact_by_display_name(name)
         return matches[0] if matches else None
 
@@ -921,7 +925,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 continue
             if not rows:
                 continue
-            contact = db.get_contact_by_username(username)
+            contact = db.ensure_contact(username)
             row = rows[0]
             chats.append(
                 {
@@ -1213,6 +1217,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             return _json({"status": "invalid_request", "message": "message is required"})
 
         resolved = _resolve_rpa_target(recipient_name)
+        if "error" in resolved:
+            return _rpa_target_not_found(resolved)
         username = resolved["username"]
         nickname = resolved["target"]
         is_chatroom = bool(resolved["is_chatroom"])
@@ -1281,6 +1287,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 }
             )
         resolved = _resolve_rpa_target(recipient_name)
+        if "error" in resolved:
+            return _rpa_target_not_found(resolved)
         action_data = {
             "target": resolved["target"],
             "target_username": resolved["username"],
@@ -1330,6 +1338,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         except ValueError as exc:
             return _json({"status": "invalid_request", "message": str(exc)})
         resolved = _resolve_rpa_target(recipient_name)
+        if "error" in resolved:
+            return _rpa_target_not_found(resolved)
         extra = {
             "recipient_name": recipient_name,
             "resolved": resolved,
@@ -1400,6 +1410,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         if not user_name:
             return _json({"status": "invalid_request", "message": "user_name is required"})
         resolved = _resolve_rpa_target(room_name or user_name)
+        if "error" in resolved:
+            return _rpa_target_not_found(resolved)
         action_data = {
             "target": resolved["target"],
             "user_name": user_name,
@@ -1492,6 +1504,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 "Removing a group member requires explicit confirm=true.",
             )
         resolved = _resolve_rpa_target(room_name)
+        if "error" in resolved:
+            return _rpa_target_not_found(resolved)
         action_data = {"target": resolved["target"], "user_name": member_name}
         return _dispatch_rpa_tool(
             ctx,
@@ -1528,6 +1542,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 "Inviting a group member requires explicit confirm=true.",
             )
         resolved = _resolve_rpa_target(room_name)
+        if "error" in resolved:
+            return _rpa_target_not_found(resolved)
         action_data = {"target": resolved["target"], "user_name": user_name}
         return _dispatch_rpa_tool(
             ctx,
@@ -1564,6 +1580,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 "Renaming a group requires explicit confirm=true.",
             )
         resolved = _resolve_rpa_target(room_name)
+        if "error" in resolved:
+            return _rpa_target_not_found(resolved)
         action_data = {"target": resolved["target"], "name": new_name}
         return _dispatch_rpa_tool(
             ctx,
@@ -1600,6 +1618,8 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 "Renaming your group display name requires explicit confirm=true.",
             )
         resolved = _resolve_rpa_target(room_name)
+        if "error" in resolved:
+            return _rpa_target_not_found(resolved)
         action_data = {"target": resolved["target"], "name": new_name_in_room}
         return _dispatch_rpa_tool(
             ctx,
