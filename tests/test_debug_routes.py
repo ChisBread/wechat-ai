@@ -180,6 +180,12 @@ class DummyDatabaseService:
     def get_contact_by_username(self, username):
         return self._contact_by_username.get(username)
 
+    def ensure_contact(self, username):
+        return self.get_contact_by_username(username)
+
+    def refresh_contact_metadata(self, force=False):
+        pass
+
     def get_contact_by_display_name(self, name):
         if name in {"Alice", "alice"}:
             return [self.contact]

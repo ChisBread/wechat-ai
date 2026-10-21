@@ -108,6 +108,7 @@ class LinuxDatabaseService:
         self.last_error = ""
         self.last_scan_at = 0.0
         self._last_message_map_refresh = 0.0
+        self._last_contact_refresh = 0.0
 
     def setup(self) -> None:
         """Discover DBs, load keys, open primary caches, and prime sequence state."""
@@ -146,8 +147,7 @@ class LinuxDatabaseService:
             if self._primary_account:
                 self.user_info.data_dir = str(self._primary_account.account_dir)
                 self.user_info.account = self.user_info.account or self._primary_account.account_id
-            self.load_contacts()
-            self.load_chat_rooms()
+            self.refresh_contact_metadata(force=True)
             self.load_message_username_map()
             if preserve_sequences:
                 # Include new tables initialized while recovering a replacement;
@@ -376,6 +376,31 @@ class LinuxDatabaseService:
         result.sort(key=lambda row: row[3] or 0, reverse=reverse)
         return result[: int(limit)]
 
+    def refresh_contact_metadata(self, force: bool = False) -> None:
+        """Reload contacts and rooms at most every 10 seconds unless forced.
+
+        Also called during periodic message-map refreshes. Reuse open databases
+        without key discovery or changes to message maps and polling sequences.
+        """
+        with self._lock:
+            now = time.monotonic()
+            if not force and self._last_contact_refresh and now - self._last_contact_refresh < 10:
+                return
+            self.load_contacts()
+            self.load_chat_rooms()
+            self._last_contact_refresh = time.monotonic()
+
+    def ensure_contact(self, name: str) -> Optional[Contact]:
+        """Look up a username, retrying a miss after a throttled metadata reload."""
+        if not name:
+            return None
+        with self._lock:
+            contact = self.get_contact_by_username(name)
+            if contact is None:
+                self.refresh_contact_metadata()
+                contact = self.get_contact_by_username(name)
+            return contact
+
     def get_contact_by_username(
         self,
         username: str,
@@ -384,7 +409,8 @@ class LinuxDatabaseService:
     ) -> Optional[Contact]:
         if not username:
             return None
-        return self._contact_by_username.get(username)
+        with self._lock:
+            return self._contact_by_username.get(username)
 
     def get_contact_by_sender_id(
         self,
@@ -397,20 +423,22 @@ class LinuxDatabaseService:
         if db_path:
             username = self._sender_username_by_id(db_path, int(sender_id))
             return self.get_contact_by_username(username) if username else None
-        return self._contact_by_id.get(int(sender_id))
+        with self._lock:
+            return self._contact_by_id.get(int(sender_id))
 
     def get_contact_in_room(self, room_username: str, username: str) -> Optional[Contact]:
-        contact = self.get_contact_by_username(username)
-        room = self._chat_rooms.get(room_username)
-        if not contact or not room:
-            return contact
-        try:
-            room_name = room.member_display_names.get(username, "")
-        except Exception:
-            return contact
-        # Never put a room nickname into the global contact cache: the same
-        # person can have different names in different rooms.
-        return replace(contact, room_remark=room_name)
+        with self._lock:
+            contact = self.get_contact_by_username(username)
+            room = self._chat_rooms.get(room_username)
+            if not contact or not room:
+                return contact
+            try:
+                room_name = room.member_display_names.get(username, "")
+            except Exception:
+                return contact
+            # Never put a room nickname into the global contact cache: the same
+            # person can have different names in different rooms.
+            return replace(contact, room_remark=room_name)
 
     def get_contact_by_display_name(self, display_name: str) -> list[Contact]:
         if not display_name:
@@ -418,7 +446,9 @@ class LinuxDatabaseService:
         needle = display_name.lower()
         exact: list[Contact] = []
         fuzzy: list[Contact] = []
-        for contact in self._contact_by_username.values():
+        with self._lock:
+            contacts = list(self._contact_by_username.values())
+        for contact in contacts:
             names = [
                 contact.username,
                 contact.display_name,
@@ -434,22 +464,24 @@ class LinuxDatabaseService:
         return exact + fuzzy
 
     def get_room_by_md5(self, username_md5: str) -> Optional[Contact]:
-        return self._room_by_md5.get(username_md5)
+        with self._lock:
+            return self._room_by_md5.get(username_md5)
 
     def get_room_member_list(self, room_user_name: str) -> list[Contact]:
-        room = self._chat_rooms.get(room_user_name)
-        if not room:
-            return []
-        members: list[Contact] = []
-        try:
-            usernames = room.parsed_member_list
-        except Exception:
-            return []
-        for username in usernames:
-            contact = self.get_contact_in_room(room_user_name, username)
-            if contact:
-                members.append(contact)
-        return members
+        with self._lock:
+            room = self._chat_rooms.get(room_user_name)
+            if not room:
+                return []
+            members: list[Contact] = []
+            try:
+                usernames = room.parsed_member_list
+            except Exception:
+                return []
+            for username in usernames:
+                contact = self.get_contact_in_room(room_user_name, username)
+                if contact:
+                    members.append(contact)
+            return members
 
     def get_room_member_count_by_name(self, room_name: str) -> int:
         rooms = [contact for contact in self.get_contact_by_display_name(room_name) if contact.is_chatroom]
@@ -924,6 +956,8 @@ class LinuxDatabaseService:
                     and now - self._last_message_map_refresh >= self.message_map_refresh_interval)
         if self._replaced_message_paths or periodic:
             self.load_message_username_map()
+        if periodic:
+            self.refresh_contact_metadata()
 
     def _fetch_new_rows(self, db_path: Path, table_name: str) -> list[tuple]:
         last_id = self._table_sequences.get((db_path, table_name), 0)
