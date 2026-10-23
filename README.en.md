@@ -45,7 +45,7 @@ Recommended MCP flow:
 5. Human confirmation
 6. The same write tool without `dry_run`
 
-Ported write tools include `send_text_msg`, `send_file_msg`, `send_image_msg`, `send_pat_msg`,
+Ported write tools include `send_text_msg`, `send_file_msg`, `send_image_msg`, `send_voice_msg`, `send_pat_msg`,
 `public_room_announcement`, `leave_room`, `remove_room_member`,
 `invite_room_member`, `rename_room_name`, and `rename_name_in_room`.
 Group-management operations require explicit human confirmation.
@@ -64,6 +64,13 @@ without writing a file or sending. See the [MCP parameter guide](docs/mcp.md#图
 for examples, MIME correction, and completion/timeout semantics.
 
 Media notes:
+
+- `send_voice_msg` sends native voice bubbles from a local audio file or base64
+  using FFmpeg and an isolated PulseAudio microphone. Inputs are limited to
+  10 MiB and 1–55 seconds. Requires Linux WeChat 4.1.13's light theme at 100%
+  DPI. Playback runs in real time; query the original action after a timeout.
+  Verification checks acknowledged voice metadata and duration, not audio
+  content. Rebuild the container to apply the shared PulseAudio socket setup.
 
 - The database reader resolves local paths for images, videos, and files.
 - Linux WeChat 4.x image `.dat` files are detected and can be decrypted when

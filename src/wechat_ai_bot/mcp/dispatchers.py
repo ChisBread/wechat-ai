@@ -194,6 +194,15 @@ class QueueCommandDispatcher:
                     or target.endswith("@chatroom")
                 ),
             )
+        if action_type_value in (RPAActionType.SEND_VOICE.value, "send_voice_msg"):
+            from wechat_ai_bot.rpa.action_handlers import SendVoiceAction
+
+            return SendVoiceAction(
+                target_username=value("target_username", "username"),
+                file_path=value("file_path"),
+                target=value("target", "recipient_name"),
+                is_chatroom=bool(action_data.get("is_chatroom")),
+            )
         if action_type_value in (RPAActionType.PAT.value, "send_pat_msg"):
             from wechat_ai_bot.rpa.action_handlers import PatAction
 

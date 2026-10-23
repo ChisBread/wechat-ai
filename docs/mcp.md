@@ -142,6 +142,7 @@ OpenClaw 或类似支持 MCP JSON 配置的客户端可使用 Streamable HTTP：
 | `send_text_msg` | 文本消息入 RPA 队列并可等待执行结果 | 发送前先用 `dry_run=true` |
 | `send_file_msg` | 发送容器内可访问的本地文件 | `file_path` 必须是容器内路径 |
 | `send_image_msg` | 接收 base64 图片并通过现有 RPA 文件动作按图片发送 | 无需预先上传文件；PNG/JPEG/WebP/GIF，解码后最大 10 MiB |
+| `send_voice_msg` | 将本地音频或 base64 录入微信，发送原生语音条 | 最大 10 MiB、1–55 秒；本地 RPA、PulseAudio、FFmpeg |
 | `get_rpa_result` | 按 `action_id` 查询原任务结果，不重新提交 | 用于 `queued` / `timeout` 后确认最终状态 |
 | `send_pat_msg` | 对联系人或群成员执行“拍一拍” | 群内拍一拍要求目标头像在当前消息区可见 |
 | `public_room_announcement` | 群公告入 RPA 队列 | 需要账号有群管理权限，真实执行需 `confirm=true` |
@@ -202,6 +203,7 @@ MCP 工具参数一律使用 `snake_case`，不要把 Web API、RPA action 或�
 | --- | --- | --- |
 | `send_text_msg` | `recipient_name: str`，`message: str`，`at_user_name: str \| null = null`，`dry_run: bool = false`，`wait_seconds: float = 12` | 给联系人或群聊发文本。群聊 @ 使用 `at_user_name`，不要把 `@成员名` 手写进 `message`。 |
 | `send_file_msg` | `recipient_name: str`，`file_path: str`，`dry_run: bool = false`，`wait_seconds: float = 12` | `file_path` 必须是容器内可读文件路径，例如 `/config/exports/report.pdf`。 |
+| `send_voice_msg` | `recipient_name: str`，`file_path: str \| null = null`，`audio_base64: str \| null = null`，`dry_run: bool = false`，`wait_seconds: float \| null = 12` | 两种音频输入必须且只能提供一种。发送原生语音条；不支持 @，不包含 TTS。 |
 | `send_image_msg` | `recipient_name: str`，`image_base64: str`，`mime_type: str \| null = "image/png"`，`file_name: str \| null = null`，`dry_run: bool = false`，`wait_seconds: float \| null = 12` | 支持裸 base64 或 `data:image/png;base64,` 前缀；真实格式以文件头为准，MIME 与扩展名自动纠正。不支持 `at_user_name`。 |
 | `send_pat_msg` | `user_name: str`，`room_name: str \| null = null`，`dry_run: bool = false`，`wait_seconds: float = 12` | 私聊拍一拍只传 `user_name`；群聊拍一拍传 `room_name` 和群内成员 `user_name`。 |
 | `public_room_announcement` | `room_name: str`，`content: str`，`force_edit: bool = false`，`confirm: bool = false` | 发布或编辑群公告；真实执行必须 `confirm=true`。 |
@@ -254,6 +256,31 @@ MCP 工具参数一律使用 `snake_case`，不要把 Web API、RPA action 或�
 
 `get_rpa_result(action_id)` 返回 `queued`、`running`、`executed`、`failed` 或 `unknown`。结果仅在内存保留最近 1000 个任务，进程重启或结果过期后为 `unknown`；此时也应先查最近消息，不能把结果缺失当作未发送。
 - 图片暂存于系统临时目录下的 `wechat_ai_send_images_*` 目录。入队前失败立即清理；入队后由 RPA 执行结束的 `finally` 清理，包括执行失败和异常。等待超时也会保留文件直到执行结束，避免微信读取时文件已被删除。
+
+### 语音发送
+
+使用微信原生录音功能，将已准备好的音频通过独立虚拟麦克风播放给微信。支持 FFmpeg 可解码的 WAV、MP3、M4A、OGG、FLAC 等音频；内容在容器内处理，不调用第三方语音服务。需要文字转语音时，先由调用方生成音频。
+
+```json
+{
+  "tool": "send_voice_msg",
+  "arguments": {
+    "recipient_name": "文件传输助手",
+    "file_path": "/config/exports/reply.wav",
+    "dry_run": true
+  }
+}
+```
+
+调用方也可以用 `audio_base64` 代替 `file_path`，传标准 base64 或 `data:audio/wav;base64,...`。`dry_run=true` 会实际解码到临时目录以验证音频，并在返回前删除；不操作微信、不创建麦克风、不入队。确认目标和音频后去掉 `dry_run`，真实执行需要 `WECHAT_AI_MCP_WRITE_ENABLED=true`。
+
+- 输入最多 10 MiB，解码后时长必须为 **1–55 秒**；超过上限直接拒绝，不截断，也不自动拆分发送。预留时间用于录音启动与结束，避免微信 60 秒录音上限。FFmpeg 解码超时为 20 秒，不接受网络 URL。
+- 需要 Linux 微信 **4.1.13 浅色界面、100% DPI**。会匹配“发语音 / 取消 / 发送”实际图标；主题、缩放或新版界面不匹配时返回失败，不盲点坐标。执行期间不要手动切换聊天或操作录音界面。
+- 需要本地 RPA 队列及 `ffmpeg`、`pactl`、`paplay`。新镜像已包含依赖和 `PULSE_SERVER=unix:/defaults/native`；升级请重建容器。微信与 bot 必须访问同一个 PulseAudio 服务。微信提示“未检测到麦克风设备”时检查该连接和 `/defaults` 目录的可遍历权限。
+- 每次发送创建独立音频设备，录音期间临时切换默认输入，验证并绑定新建的微信录音流。微信已有录音或通话时拒绝执行。结束后恢复原默认输入并卸载临时设备；录音失败时取消，不降级成文件附件。不要同时让其他应用开启录音。
+- 容器会在微信启动前创建常驻输入设备 `wechat_ai_input`，供微信枚举麦克风；它映射 Selkies 的 `input.monitor`，与每次发送的临时设备分开。旧容器首次升级需重启微信，避免微信缓存“无麦克风”的状态。
+- 播放耗时接近音频时长。`wait_seconds` 范围 0–60，默认 12；长语音可能先返回 `timeout`。这不会取消发送，也不会提前删除音频；请通过 `get_rpa_result(action_id)` 查询原任务，禁止自动重发。暂存音频由任务结束时清理。
+- 成功需要在目标会话的数据库中找到唯一的新增外发语音，发送者为当前账号、有服务器 ID，时长与本次录音相差不超过 2 秒。返回 `verification=database_voice_metadata`、`audio_content_verified=false`：微信重新编码了录音，因此没有核验音频内容相同，也不表示对方已播放。记录不匹配、匹配多条或数据库不可用都不会报告成功。
 
 ### 群聊 @ 协议
 

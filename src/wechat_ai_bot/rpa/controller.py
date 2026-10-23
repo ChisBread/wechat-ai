@@ -99,12 +99,14 @@ class RPAController:
             RenameNameInRoomHandler,
             RenameRoomNameHandler,
             SendFileHandler,
+            SendVoiceHandler,
             SendTextMessageHandler,
         )
 
         handler_classes = [
             (RPAActionType.SEND_TEXT_MESSAGE, SendTextMessageHandler),
             (RPAActionType.SEND_FILE, SendFileHandler),
+            (RPAActionType.SEND_VOICE, SendVoiceHandler),
             (RPAActionType.PAT, PatHandler),
             (RPAActionType.PUBLIC_ROOM_ANNOUNCEMENT, PublicRoomAnnouncementHandler),
             (RPAActionType.DOWNLOAD_IMAGE, DownloadImageHandler),

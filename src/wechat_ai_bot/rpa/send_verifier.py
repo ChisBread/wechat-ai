@@ -13,7 +13,7 @@ from wechat_ai_bot.weixin.message_classes import MessageType
 from wechat_ai_bot.weixin.message_content import chat_message_text
 
 
-SEND_ACTIONS = {RPAActionType.SEND_TEXT_MESSAGE, RPAActionType.SEND_FILE}
+SEND_ACTIONS = {RPAActionType.SEND_TEXT_MESSAGE, RPAActionType.SEND_FILE, RPAActionType.SEND_VOICE}
 NO_RETRY = (
     "Do not automatically resend. Check get_rpa_result and recent messages first; "
     "an unconfirmed send may still appear later and resending can duplicate it."
@@ -91,6 +91,7 @@ class SendVerifier:
     def verify(self, action):
         deadline = time.monotonic() + self.timeout
         while True:
+            matches = []
             for row in self._rows():
                 path, local_id = self._identity(row)
                 if local_id <= self.watermarks.get(path, 0):
@@ -105,13 +106,19 @@ class SendVerifier:
                 if not sender or sender.username != self.sender:
                     continue
                 if self._matches(action, row):
-                    return {
+                    matches.append({
                         "verified": True,
                         "verification": "database",
                         "recipient_username": self.username,
                         "local_id": local_id,
                         "server_id": str(row[1]),
-                    }
+                    })
+            if matches:
+                if action.action_type == RPAActionType.SEND_VOICE:
+                    if len(matches) != 1:
+                        raise SendVerificationError("Multiple matching voice messages; delivery is ambiguous")
+                    matches[0].update(verification="database_voice_metadata", audio_content_verified=False)
+                return matches[0]
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise SendVerificationError("No matching new sent message found before verification timeout")
@@ -122,6 +129,18 @@ class SendVerifier:
         text = chat_message_text(
             row[12], row[15], chat_username=self.username, sender_username=self.sender,
         )
+        if action.action_type == RPAActionType.SEND_VOICE:
+            if row[2] != MessageType.Audio or not action.recording_seconds:
+                return False
+            try:
+                root = ElementTree.fromstring(text)
+                voice = root if root.tag == "voicemsg" else root.find(".//voicemsg")
+                duration = int(voice.get("voicelength", "0")) / 1000 if voice is not None else 0
+            except (ElementTree.ParseError, ValueError):
+                return False
+            # WeChat re-encodes microphone input, so the source file hash cannot
+            # match. This is explicitly metadata verification, not audio identity.
+            return duration > 0 and abs(duration - action.recording_seconds) <= 2
         if action.action_type == RPAActionType.SEND_TEXT_MESSAGE:
             if row[2] not in (MessageType.Text, MessageType.Text2):
                 return False

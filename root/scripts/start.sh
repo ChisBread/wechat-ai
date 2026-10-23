@@ -1,6 +1,7 @@
 #!/bin/bash
 
 BOT_LOG="/config/logs/bot.log"
+export PULSE_SERVER="${PULSE_SERVER:-unix:/defaults/native}"
 mkdir -p /config/logs /config/runtime_images /config/.config/Ultralytics
 chown -R abc:users /config/logs /config/runtime_images /config/.config/Ultralytics 2>/dev/null || true
 chmod -R u+rwX,g+rwX /config/logs /config/runtime_images /config/.config/Ultralytics 2>/dev/null || true
@@ -61,6 +62,7 @@ fi
 # start WeChat application in the background if exists and auto-start enabled
 if [ "${AUTO_START_WECHAT:-true}" = "true" ]; then
     if [ -f /usr/bin/wechat ]; then
+        bash /scripts/setup-voice-input.sh || true
         log_line "[wechat-ai] $(date): launching WeChat"
         nohup /usr/bin/wechat > /config/logs/wechat.log 2>&1 &
     fi
