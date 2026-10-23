@@ -6,6 +6,12 @@ BOT_CONFIG="${BOT_CONFIG_PATH:-/config/config.yaml}"
 BOT_USER="${BOT_RUN_USER:-root}"
 BOT_CHILD_PID=""
 
+export PULSE_SERVER="${PULSE_SERVER:-unix:/defaults/native}"
+# Repair directories touched by older root audio clients, before starting GUI.
+if [ "$PULSE_SERVER" = "unix:/defaults/native" ] && [ "$(id -u)" = "0" ]; then
+    chmod 755 /defaults
+fi
+
 stop_bot_children() {
     if [ -n "$BOT_CHILD_PID" ]; then
         kill -TERM "-$BOT_CHILD_PID" 2>/dev/null || kill -TERM "$BOT_CHILD_PID" 2>/dev/null || true
@@ -26,11 +32,13 @@ start_wechat_if_needed() {
         return
     fi
     if [ -x /usr/bin/wechat ]; then
+        bash /scripts/setup-voice-input.sh || true
         echo "[bot] $(date): WeChat not running; launching as abc on DISPLAY=${DISPLAY:-:1}" | tee -a "$BOT_LOG"
         sudo -u abc env \
             HOME=/config \
             DISPLAY="${DISPLAY:-:1}" \
             XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/config/.XDG}" \
+            PULSE_SERVER="$PULSE_SERVER" \
             LANG="${LANG:-zh_CN.UTF-8}" \
             LANGUAGE="${LANGUAGE:-zh_CN:zh}" \
             LC_ALL="${LC_ALL:-zh_CN.UTF-8}" \
@@ -87,6 +95,7 @@ while true; do
                 "$bot_python" -m wechat_ai_bot.bot --config "$bot_config"
         fi
         exec sudo -u "$bot_user" env \
+            PULSE_SERVER="$PULSE_SERVER" \
             HOME="${HOME:-/config}" \
             DISPLAY="${DISPLAY:-:1}" \
             XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/config/.XDG}" \

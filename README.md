@@ -139,6 +139,7 @@ WECHAT_AI_MCP_WRITE_ENABLED=true   # 允许 send_text_msg、send_file_msg、群�
 - `send_text_msg`：发送文本消息。参数是 `recipient_name`、`message`、可选 `at_user_name`；群聊 @ 不要手写进正文，应该传 `at_user_name`。默认会等待本地 RPA 执行结果；传 `wait_seconds=0` 可只入队不等待。
 - `send_file_msg`：发送容器内可访问的本地文件。
 - `send_image_msg`：直接接收图片 base64（也支持 data URI），由服务端临时落盘并按图片发送；支持 PNG/JPEG/WebP/GIF，解码后最大 10 MiB，可先用 `dry_run=true` 校验。
+- `send_voice_msg`：接收本地音频路径或 base64，通过虚拟麦克风录制并发送微信原生语音条。输入最大 10 MiB、时长 1–55 秒；需要 Linux 微信 4.1.13 浅色界面、100% 缩放及 PulseAudio，详见[语音发送协议](docs/mcp.md#语音发送)。
 - `get_rpa_result`：按发送返回的 `action_id` 查询原任务状态。文本/图片/文件只有回查数据库确认新增外发内容后才返回 `executed`；核验失败返回 `failed`。`queued` / `timeout` 后应查询原任务，禁止自动重发，避免重复消息。
 - `send_pat_msg`：对联系人或群内成员执行“拍一拍”。
 - `public_room_announcement`：发布或编辑群公告。
@@ -251,6 +252,7 @@ bot 服务以 root 运行，是为了读取 `/proc/<wechat-pid>/mem`。微信、
 - `database.scan_keys`：扫描微信进程内存中的 SQLCipher key。
 - `aes_xor_key`：图片 DAT 解密参数，格式如 `AES文本key,60` 或 `hex:<hexkey>,60`；留空则只解析媒体路径。
 - `rpa.window.*`：控制微信窗口目标尺寸，服务 RPA 和 YOLO 对齐。
+- 语音发送使用镜像内的 FFmpeg、`pactl` 和 `paplay`，音频在本地处理。镜像通过 `PULSE_SERVER=unix:/defaults/native` 连接 Selkies 音频服务，防止 root 音频客户端改变共享目录权限。升级后需重建容器，让微信和 bot 都加载此配置。
 - `visual_message.*`：OCR/YOLO 视觉读取兜底配置。
 - `mcp.host` / `mcp.port`：容器内 MCP 监听地址和端口。
 - `mqtt.host`：旧式/远程 MQTT 转发；留空表示关闭。

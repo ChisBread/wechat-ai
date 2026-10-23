@@ -34,6 +34,7 @@ from wechat_ai_bot.mcp.image_upload import decode_image_upload
 from wechat_ai_bot.mcp.protocols import CommandDispatcher
 from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.rpa.rpa_action import RPAActionType
+from wechat_ai_bot.rpa.voice_audio import prepare_voice
 from wechat_ai_bot.weixin.message_content import chat_message_text, contact_in_chat
 from wechat_ai_bot.weixin.message_classes import MessageType
 
@@ -386,7 +387,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
             if not isinstance(app_context.command_dispatcher, QueueCommandDispatcher):
                 response.update(
                     status="unavailable", queued=False, completed=False,
-                    message="Uploaded images require the local RPA queue dispatcher",
+                    message="Staged media requires the local RPA queue dispatcher",
                 )
                 return _json(response)
             lifecycle = {"on_complete": on_complete, "on_queued": on_queued}
@@ -1224,7 +1225,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
     def get_rpa_result(ctx: Context, action_id: str) -> str:
         """Read the original RPA task result after queued/timeout; never resubmit it.
 
-        executed means text/image/file sends passed database verification.
+        executed means text/image/file/voice sends passed database verification.
         failed or unknown must not trigger an automatic resend: check recent
         messages first. Results are in memory (the latest 1000 tasks).
         """
@@ -1347,6 +1348,64 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 "file_path": str(path.resolve()),
             },
         )
+
+    @mcp.tool()
+    @handle_tool_exceptions
+    def send_voice_msg(
+        ctx: Context,
+        recipient_name: str,
+        file_path: Optional[str] = None,
+        audio_base64: Optional[str] = None,
+        dry_run: bool = False,
+        wait_seconds: Optional[float] = 12,
+    ) -> str:
+        """Send a native voice bubble using WeChat's microphone recording UI.
+
+        Supply exactly one local file_path or audio_base64 (audio data URI also
+        accepted). FFmpeg decodes WAV/MP3/M4A/OGG/FLAC etc.; max 10 MiB, 1–55 s.
+        Requires Linux WeChat 4.1.13 light theme, 100% DPI, PulseAudio and the
+        local RPA queue. dry_run decodes to temporary files then removes them;
+        it does not open the microphone or send. Playback takes real time.
+        queued/timeout: query get_rpa_result(action_id), never automatically
+        resend. Verification checks new acknowledged voice metadata/duration,
+        not the spoken content or the recipient's playback.
+        """
+        if not str(recipient_name or "").strip():
+            return _json({"status": "invalid_request", "message": "recipient_name is required"})
+        if not dry_run and not _mcp_write_enabled():
+            return _mcp_write_blocked("send_voice_msg")
+        resolved = _resolve_rpa_target(recipient_name)
+        if "error" in resolved:
+            return _rpa_target_not_found(resolved)
+        directory = None
+        transferred = False
+
+        def mark_queued():
+            nonlocal transferred
+            transferred = True
+
+        try:
+            directory = tempfile.TemporaryDirectory(prefix="wechat_ai_voice_")
+            path, metadata = prepare_voice(directory.name, file_path=file_path, audio_base64=audio_base64)
+            action_data = {
+                "target": resolved["target"], "target_username": resolved["username"],
+                "is_chatroom": bool(resolved["is_chatroom"]),
+            }
+            if not dry_run:
+                action_data["file_path"] = str(path)
+            return _dispatch_rpa_tool(
+                ctx, tool_name="send_voice_msg", action_type=RPAActionType.SEND_VOICE.value,
+                action_data=action_data, dry_run=dry_run, wait_seconds=wait_seconds,
+                extra={"recipient_name": recipient_name, "resolved": resolved, "audio": metadata},
+                on_complete=directory.cleanup, on_queued=mark_queued,
+            )
+        except (ValueError, OSError) as exc:
+            return _json({"status": "invalid_request", "message": str(exc)})
+        except RuntimeError as exc:
+            return _json({"status": "unavailable", "message": str(exc)})
+        finally:
+            if directory is not None and not transferred:
+                directory.cleanup()
 
     @mcp.tool()
     @handle_tool_exceptions

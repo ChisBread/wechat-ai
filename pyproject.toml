@@ -61,6 +61,7 @@ package-dir = {"" = "src"}
 [tool.setuptools.package-data]
 "wechat_ai_bot.yolo.models" = ["*.pt"]
 "wechat_ai_bot.mcp" = ["*.html"]
+"wechat_ai_bot.rpa" = ["assets/*.png"]
 
 # ===================================================================
 # Core plugin entry points

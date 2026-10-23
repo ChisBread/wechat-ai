@@ -3,13 +3,16 @@ import hashlib
 import importlib
 import os
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from wechat_ai_bot.models import UserInfo
-from wechat_ai_bot.services.core.linux_database_service import LinuxDatabaseService, MESSAGE_COLUMNS
+from wechat_ai_bot.services.core.linux_database_service import (
+    LinuxDatabaseAccount,
+    LinuxDatabaseService,
+    MESSAGE_COLUMNS,
+)
 
 KEY = '01' * 32  # Synthetic key, never a real account key.
 
@@ -53,7 +56,15 @@ def database(request, tmp_path):
                                    message_map_refresh_interval=0)
     service._driver = driver
     service._keys[path] = KEY
-    service._primary_account = SimpleNamespace(db_storage_dir=tmp_path)
+    # Periodic message-map refresh also reads the account's database inventory
+    # for contacts. Use the production model even for a message-only fixture.
+    service._primary_account = LinuxDatabaseAccount(
+        account_dir=tmp_path,
+        account_id='synthetic',
+        suffix='',
+        db_storage_dir=tmp_path,
+        databases={'message/message_0.db': path},
+    )
     service.load_message_username_map()
     service._prime_message_sequences()
     service.is_available = True
@@ -180,8 +191,6 @@ def test_key_change_keeps_failed_tables_available_for_existing_error_recovery(da
           patch.object(service, 'load_chat_rooms'),
           patch.object(service, 'get_status', return_value={'available': True}),
           patch.object(service, 'rescan_keys', side_effect=lambda: service._keys.update({path: next_key}))):
-        service._primary_account.account_dir = path.parent.parent
-        service._primary_account.account_id = 'synthetic'
         service.check_new_messages()
         service.check_new_messages()
     assert {(table, row[0]) for table, row in service.check_new_messages()} == {
@@ -228,6 +237,8 @@ def test_replacement_between_mapping_queries_does_not_mix_generations(database):
     service._last_message_map_refresh = 0
     with patch.object(service, 'execute_query', side_effect=replace_after_username_query):
         assert len(service.get_messages_by_username('new-chat')) == 1
+    assert replaced
+    assert service._last_contact_refresh > 0
     assert {(table, row[0]) for table, row in service.check_new_messages()} == {
         (table_for('alice'), 2), (table_for('new-chat'), 1),
     }
@@ -280,7 +291,13 @@ for command in sys.stdin:
         service = LinuxDatabaseService(UserInfo(), scan_keys=False, message_map_refresh_interval=0)
         service._driver = importlib.import_module(request.param)
         service._keys[path] = KEY
-        service._primary_account = SimpleNamespace(db_storage_dir=path.parent.parent)
+        service._primary_account = LinuxDatabaseAccount(
+            account_dir=path.parent.parent,
+            account_id='synthetic',
+            suffix='',
+            db_storage_dir=path.parent.parent,
+            databases={'message/message_0.db': path},
+        )
         service._database_files._wechat_processes = lambda: [Path('/proc') / str(process.pid)]
         service.load_message_username_map()
         service._prime_message_sequences()

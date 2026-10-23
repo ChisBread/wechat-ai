@@ -62,6 +62,12 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     /opt/venv-bot/bin/pip install --find-links "${PYTORCH_FIND_LINKS}" -r /tmp/requirements.txt && \
     rm /tmp/requirements.txt
 
+# Selkies normally provides these. Keep the fallback after Python dependencies
+# so adding voice support does not invalidate the large PyTorch install layer.
+RUN if ! command -v pactl >/dev/null || ! command -v paplay >/dev/null; then \
+        apt-get update && apt-get install -y --no-install-recommends pulseaudio-utils; \
+    fi
+
 COPY pyproject.toml /app/
 COPY README.md README.en.md LICENSE CREDITS.md /app/
 COPY docs/ /app/docs/
@@ -89,6 +95,9 @@ ENV QT_AUTO_SCREEN_SCALE_FACTOR="0"
 ENV QT_SCALE_FACTOR="1"
 ENV QT_FONT_DPI="96"
 ENV YOLO_CONFIG_DIR="/config/.config/Ultralytics"
+# Explicit socket prevents root libpulse clients from chmodding the shared
+# PULSE_RUNTIME_PATH (/defaults) to 0700 and locking out the desktop user.
+ENV PULSE_SERVER="unix:/defaults/native"
 
 RUN if [ -f /usr/share/icons/hicolor/128x128/apps/wechat.png ]; then \
         cp /usr/share/icons/hicolor/128x128/apps/wechat.png /usr/share/selkies/www/icon.png; \

@@ -18,6 +18,7 @@ from .rename_name_in_room_handler import (
 )
 from .rename_room_name_handler import RenameRoomNameHandler, RenameRoomNameAction
 from .send_file_handler import SendFileHandler, SendFileAction
+from .send_voice_handler import SendVoiceHandler, SendVoiceAction
 
 __all__ = [
     "PublicRoomAnnouncementHandler",
@@ -44,6 +45,8 @@ __all__ = [
     "RenameRoomNameAction",
     "SendFileHandler",
     "SendFileAction",
+    "SendVoiceHandler",
+    "SendVoiceAction",
     "SendTextMessageHandler",
     "SendTextMessageAction",
     "RPAActionType",
