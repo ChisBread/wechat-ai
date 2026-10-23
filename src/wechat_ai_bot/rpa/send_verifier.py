@@ -146,8 +146,8 @@ class SendVerifier:
                 return False
             if action.at_user_name:
                 name = str(action.at_user_name).strip().lstrip("@").strip()
-                parts = name.split()
-                name = max(parts, key=len) if parts else ""
+                # Native mention chips may include a leading U+2005 separator.
+                text = text.removeprefix("\u2005")
                 # A mention must be present; a suffix/substring match is unsafe.
                 match = re.match(r"^@" + re.escape(name) + r"[\u2005 \t]", text)
                 if not match:

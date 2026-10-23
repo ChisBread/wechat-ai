@@ -36,10 +36,10 @@ class SendFileHandler(BaseActionHandler):
                 return False
             if not self.window_manager.switch_session(action.target):
                 return False
+            if not self.controller.message_sender.clear_input_box():
+                return False
             if not copy_file_to_clipboard(str(path)):
                 self.logger.error("Failed to copy file to clipboard: %s", path)
-                return False
-            if not self.window_manager.activate_input_box():
                 return False
             time.sleep(self.controller.window_manager.action_delay)
             pyautogui.hotkey("ctrl", "v")

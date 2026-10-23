@@ -1003,16 +1003,28 @@ class XFCEWindowManager:
         return self.get_current_session_name()
 
     def activate_input_box(self, offset_x: int = 0) -> bool:
+        """Focus the editor interior, above the bottom toolbar and send button."""
         try:
-            sb = self.get_icon_position("send_button")
-            if not sb: return False
-            sx, sy = get_center_point(sb)
-            _xdotool("mousemove", str(self.MSG_TOP_X + 50 + offset_x), str(sy))
-            _xdotool("click", "1")
+            send_button = self.get_icon_position("send_button")
+            if not send_button:
+                return False
+            top = self.MSG_TOP_Y + self.MSG_HEIGHT
+            bottom = int(send_button[1])
+            if self.MSG_WIDTH <= 100 or bottom - top < 40:
+                self.logger.warning("Cannot locate a safe editor interior")
+                return False
+            x = self.MSG_TOP_X + max(20, min(80 + offset_x, self.MSG_WIDTH - 20))
+            y = (top + bottom) // 2
+            # The old (MSG_TOP_X + 50, send_y) point lies on the toolbar;
+            # a small layout shift can turn it into an attachment/icon click.
+            result = _run("xdotool", "mousemove", str(x), str(y), "click", "1")
+            if result.returncode != 0:
+                return False
             time.sleep(self.action_delay)
-            _xdotool("click", "1")
             return True
-        except Exception: return False
+        except Exception as exc:
+            self.logger.warning("Failed to focus editor: %s", exc)
+            return False
 
     def get_icon_position(self, icon_name: str) -> Optional[list]:
         return self.ICON_CONFIGS.get(icon_name, {}).get("position")

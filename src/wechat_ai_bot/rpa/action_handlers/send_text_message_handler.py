@@ -36,7 +36,6 @@ class SendTextMessageHandler(BaseActionHandler):
             if not self.window_manager.switch_session(action.target):
                 return False
             if action.at_user_name:
-                self.controller.message_sender.clear_input_box()
                 if not self.controller.message_sender.mention_user(action.at_user_name):
                     self.logger.error(
                         "Failed to mention user before sending text: %s",
