@@ -10,6 +10,7 @@ import pytest
 from wechat_ai_bot.mcp.dispatchers import QueueCommandDispatcher
 from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.rpa.action_handlers import SendFileAction, SendTextMessageAction
+from wechat_ai_bot.rpa.action_handlers.send_text_message_handler import SendTextMessageHandler
 from wechat_ai_bot.rpa.controller import RPAController
 from wechat_ai_bot.rpa.send_verifier import SendVerifier, SendVerificationError
 from wechat_ai_bot.services.core.rpa_service import RPAService
@@ -108,17 +109,23 @@ def test_missing_database_and_ambiguous_or_fuzzy_target_fail_before_send(db, ava
         prepared(db)
 
 
-@pytest.mark.parametrize("content, valid", [
-    ("me:\n@Bob\u2005hello", True),
-    ("me:\n@Bob\u2005hello again", False),
-    ("me:\n@Other\u2005hello", False),
-    ("me:\nhello", False),
+@pytest.mark.parametrize("name, content, valid", [
+    ("Bob", "me:\n@Bob\u2005hello", True),
+    ("Bob", "me:\n@Bob\u2005hello again", False),
+    ("Bob", "me:\n@Other\u2005hello", False),
+    ("Bob", "me:\nhello", False),
+    ("y", "me:\n@y\u2005hello", True),
+    ("y", "me:\n\u2005@y\u2005hello", True),
+    ("y", "me:\n\u2005@Yang\u2005hello", False),
+    ("y", "me:\n@Yang\u2005hello", False),
+    ("Bread extra", "me:\n@Bread extra\u2005hello", True),
+    ("Bread extra", "me:\n@Bread\u2005hello", False),
 ])
-def test_group_envelope_and_mention_match(db, content, valid):
+def test_group_envelope_and_mention_match(db, name, content, valid):
     db.get_contact_by_username.side_effect = None
     db.get_contact_by_username.return_value = SimpleNamespace(username="room@chatroom")
     action = SendTextMessageAction(content="hello", target="Room",
-                                   target_username="room@chatroom", at_user_name="Bob")
+                                   target_username="room@chatroom", at_user_name=name)
     verifier, _ = prepared(db, action)
     db.get_messages_by_username.return_value = [row(text=content)]
     if valid:
@@ -231,3 +238,27 @@ def test_timeout_can_query_original_task_without_requeue(db):
     assert service.get_result(result["action_id"])["status"] == "failed"
     assert controller.execute_action.call_count == 1
     assert service.get_result("unknown")["retryable"] is False
+
+
+@pytest.mark.parametrize("confirmed", [True, False])
+def test_text_handler_sends_only_after_confirmed_mention(confirmed, monkeypatch):
+    window = SimpleNamespace(
+        switch_session=Mock(return_value=True), close_all_windows=Mock(), action_delay=0,
+    )
+    sender = SimpleNamespace(
+        mention_user=Mock(return_value=confirmed), send_message=Mock(return_value=True),
+    )
+    controller = SimpleNamespace(
+        window_manager=window, message_sender=sender, image_processor=None,
+        ocr_processor=None, input_handler=None, ui_helper=None,
+        logger=logging.getLogger(__name__),
+    )
+    monkeypatch.setattr("wechat_ai_bot.rpa.action_handlers.send_text_message_handler.time.sleep", lambda _: None)
+    handler = SendTextMessageHandler(controller)
+    assert handler.execute(SendTextMessageAction(target="Room", content="hello", at_user_name="y")) is confirmed
+    sender.mention_user.assert_called_once_with("y")
+    if confirmed:
+        sender.send_message.assert_called_once_with("hello", clear_input_box=False, activate_input_box=False)
+    else:
+        sender.send_message.assert_not_called()
+    window.close_all_windows.assert_called_once()
