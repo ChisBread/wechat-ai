@@ -168,6 +168,15 @@ class QueueCommandDispatcher:
                     return str(item)
             return ""
 
+        if action_type_value == RPAActionType.TRANSCRIBE_VOICE.value:
+            from wechat_ai_bot.rpa.action_handlers import TranscribeVoiceAction
+
+            return TranscribeVoiceAction(
+                target=value("target"), target_username=value("target_username", "username"),
+                server_id=value("server_id"), message_db_path=value("message_db_path"),
+                timeout=max(1, min(float(action_data.get("timeout", 20)), 30)),
+            )
+
         if action_type_value == RPAActionType.PUBLIC_ROOM_ANNOUNCEMENT.value:
             from wechat_ai_bot.rpa.action_handlers import PublicRoomAnnouncementAction
 

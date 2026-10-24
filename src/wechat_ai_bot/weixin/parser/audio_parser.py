@@ -11,6 +11,23 @@
 import xmltodict
 
 
+def audio_transcript(xml_content, packed_info_data=None):
+    """Read WeChat's existing transcript without triggering recognition."""
+    text = parser_audio(xml_content or "").get("audio_text", "")
+    if text:
+        return text
+    if packed_info_data:
+        from .util.protocbuf.packed_info_data_pb2 import PackedInfoData
+
+        try:
+            packed = PackedInfoData()
+            packed.ParseFromString(packed_info_data)
+            return packed.info.audioTxt
+        except Exception:
+            pass
+    return ""
+
+
 def parser_audio(xml_content):
     result = {"audio_length": 0, "audio_text": ""}
     xml_content = xml_content.strip()

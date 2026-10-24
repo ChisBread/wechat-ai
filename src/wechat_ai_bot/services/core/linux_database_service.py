@@ -281,12 +281,19 @@ class LinuxDatabaseService:
         server_id: str,
         message_db_path: Path,
         username: str,
+        *,
+        fresh: bool = False,
     ) -> Optional[tuple]:
         table = self._table_for_username(Path(message_db_path), username)
         if not table:
             return None
         sql = f"select {self._message_column_sql()} from {self._q(table)} where server_id = ? limit 1"
-        rows = self.execute_query(Path(message_db_path), sql, (server_id,))
+        with self._lock:
+            if fresh:
+                # WeChat can update transcription in place. Reopen just this
+                # read connection without rescanning keys or resetting polling.
+                self._drop_connection(Path(message_db_path))
+            rows = self.execute_query(Path(message_db_path), sql, (server_id,))
         if not rows:
             return None
         return self._normalize_message_row(rows[0], Path(message_db_path))

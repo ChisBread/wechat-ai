@@ -24,6 +24,7 @@ class RPAActionType(Enum):
     SEND_LINK = "send_link"
     SEND_VIDEO = "send_video"
     SEND_VOICE = "send_voice"
+    TRANSCRIBE_VOICE = "transcribe_voice"
     FORWARD_MESSAGE = "forward_message"
     DOWNLOAD_IMAGE = "download_image"
     DOWNLOAD_VIDEO = "download_video"

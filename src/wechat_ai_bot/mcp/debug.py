@@ -722,6 +722,7 @@ def build_debug_status(
         "processes": _process_status(),
         "queues": get_queue_stats(),
         "services": {
+            "voice_transcription": _call_status(getattr(bot, "voice_transcription_service", None)),
             "message": _call_status(message_service),
             "processor": _call_status(processor_service),
             "rpa": _call_status(rpa_service),

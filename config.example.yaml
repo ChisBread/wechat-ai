@@ -82,6 +82,12 @@ rpa:
     - 0
     - 40
 
+# Use WeChat's own 转文字 UI for incoming voice messages. Requires DB access;
+# the client may use an online recognition service. No local ASR model is used.
+voice_transcription:
+  enabled: false
+  timeout: 20
+
 # Visual message reading
 visual_message:
   # Database reading is preferred. Set enabled=true to force visual reading too.
