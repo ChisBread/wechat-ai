@@ -282,6 +282,38 @@ MCP 工具参数一律使用 `snake_case`，不要把 Web API、RPA action 或�
 - 播放耗时接近音频时长。`wait_seconds` 范围 0–60，默认 12；长语音可能先返回 `timeout`。这不会取消发送，也不会提前删除音频；请通过 `get_rpa_result(action_id)` 查询原任务，禁止自动重发。暂存音频由任务结束时清理。
 - 成功需要在目标会话的数据库中找到唯一的新增外发语音，发送者为当前账号、有服务器 ID，时长与本次录音相差不超过 2 秒。返回 `verification=database_voice_metadata`、`audio_content_verified=false`：微信重新编码了录音，因此没有核验音频内容相同，也不表示对方已播放。记录不匹配、匹配多条或数据库不可用都不会报告成功。
 
+### 语音转写
+
+在 `config/config.yaml` 中配置并重启 bot：
+
+```yaml
+voice_transcription:
+  enabled: true
+  timeout: 20
+```
+
+默认关闭。启用后，只处理数据库监听收到的新入站语音；已有文字和自己的语音
+直接沿用原流程。未转写的语音进入现有 RPA 队列，核对会话标题后对可见的最近
+入站语音调用“转文字”，按账号/会话/消息 ID 去重，并回查原消息的
+`packed_info_data.info.audioTxt`（兼容 XML 的 `voicetrans.transtext`）。
+仅当数据库出现文字时判定成功，不使用 OCR 文字作为语音转写结果。
+Linux 微信 4.1.13 可能在显示文字后仍未落库，因此触发后会短暂切换到自己的会话，
+再返回目标会话促使客户端保存；该过程不发送消息。
+
+转写完成后才向插件交付这条语音；失败也只交付一次原消息。其他消息监听不阻塞，
+但后续文本可能先于语音交付。`timeout` 是进入识别阶段后的等待预算，限制为
+1–30 秒，不含排队、切换会话和单次 OCR 的耗时。每次最多检查 8 条可见入站语音；
+同一会话中邻近语音也可能被转写。旧历史不自动回补，界面不可见或菜单不支持时失败。
+微信识别可能依赖联网，本功能不提供离线 ASR。
+
+`get_recent_messages` 和 `get_chat_summary_context` 可直接读取已有转写，不触发界面操作，
+无需 `parse_media=true`。语音结果包含 `voice_to_text`，`text` 为 `【语音】...`。
+Dashboard 状态中的 `services.voice_transcription` 提供开关、等待数和已完成缓存数。
+
+需要重试指定历史消息时，可通过已认证的 Dashboard RPA 接口提交
+`action_type: "transcribe_voice"`，`action_data` 包含 `target`（会话显示名）、
+`target_username`、`server_id` 和 `message_db_path`。这仍受上述可见范围限制。
+
 ### 群聊 @ 协议
 
 群聊 @ 必须通过 `send_text_msg.at_user_name` 表达，`message` 只放真正要发送的正文。比如用户要求“在测试群 @Bread 发送 机器人测试”，调用应写成：

@@ -20,7 +20,11 @@ from .rename_room_name_handler import RenameRoomNameHandler, RenameRoomNameActio
 from .send_file_handler import SendFileHandler, SendFileAction
 from .send_voice_handler import SendVoiceHandler, SendVoiceAction
 
+from .transcribe_voice_handler import TranscribeVoiceHandler, TranscribeVoiceAction
+
 __all__ = [
+    "TranscribeVoiceHandler",
+    "TranscribeVoiceAction",
     "PublicRoomAnnouncementHandler",
     "PublicRoomAnnouncementAction",
     "DownloadFileHandler",

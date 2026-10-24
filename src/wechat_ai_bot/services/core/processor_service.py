@@ -31,10 +31,12 @@ class ProcessorService:
         message_factory_service: MessageFactoryService,
         plugin_manager: PluginManager,
         db=None,
+        voice_transcription=None,
     ):
         self.logger = logging.getLogger(__name__)
         self.user_info = user_info
         self.db = db
+        self.voice_transcription = voice_transcription
         self.message_factory_service = message_factory_service
         self.message_queue = message_queue
         self.rpa_task_queue = rpa_task_queue
@@ -111,17 +113,18 @@ class ProcessorService:
         try:
             message_obj = self.message_factory_service.create_message(message)
             if message_obj:
-                context = {
-                    "message": message_obj,
-                    "db": self.db,
-                    "room": message_obj.room,
-                    "contact": message_obj.contact,
-                    "user": self.user_info,
-                }
-                # 将任务交给异步执行器，立即返回，不阻塞
-                self.async_runner.submit_task(message_obj, context)
+                if self.voice_transcription and self.voice_transcription.submit(message_obj, self._deliver_message):
+                    return
+                self._deliver_message(message_obj)
         except Exception as e:
             self.logger.error(f"准备消息并提交给异步执行器时出错: {e}", exc_info=True)
+
+    def _deliver_message(self, message_obj):
+        context = {
+            "message": message_obj, "db": self.db, "room": message_obj.room,
+            "contact": message_obj.contact, "user": self.user_info,
+        }
+        self.async_runner.submit_task(message_obj, context)
 
     def _get_session_id(self, message) -> str:
         """获取会话ID"""
