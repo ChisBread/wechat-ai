@@ -30,6 +30,7 @@ from wechat_ai_bot.mcp.dispatchers import (
     QueueCommandDispatcher,
     UnavailableCommandDispatcher,
 )
+from wechat_ai_bot.mcp.file_upload import decode_file_upload
 from wechat_ai_bot.mcp.image_upload import decode_image_upload
 from wechat_ai_bot.mcp.protocols import CommandDispatcher
 from wechat_ai_bot.models import UserInfo
@@ -207,6 +208,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         - Query contacts and message history through read-only Linux WeChat SQLCipher DB access.
         - Send text, files, pat messages, and supported group actions via the local RPA queue only when WECHAT_AI_MCP_WRITE_ENABLED=true.
         - Use send_image_msg to upload base64 images (PNG/JPEG/WebP/GIF, up to 10 MiB) and send via the local file RPA action.
+        - Use send_file_msg with either file_path or file_base64 plus an optional file_name (uploads up to 10 MiB).
         - Admin tools that mutate local runtime state require WECHAT_AI_MCP_ADMIN_ENABLED=true.
         - Use dry_run=true before sending or changing group state when the tool supports it.
         - High-impact group operations require explicit human confirmation.
@@ -1307,16 +1309,81 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
     def send_file_msg(
         ctx: Context,
         recipient_name: str,
-        file_path: str,
+        file_path: Optional[str] = None,
         dry_run: bool = False,
         wait_seconds: Optional[float] = 12,
+        file_base64: Optional[str] = None,
+        file_name: Optional[str] = None,
     ) -> str:
-        """
-        Send a local file to a user or group via RPA.
-        file_path must be readable inside the container.
+        """Send a local file or uploaded bytes to a user/group via RPA.
+
+        Supply exactly one of file_path (readable inside the container) or
+        file_base64 (strict base64 or a data URI, nonempty, up to 10 MiB).
+        Uploaded files use the sanitized file_name, defaulting to file.bin.
+        dry_run validates uploads without writing files or queueing. Uploaded
+        files require the local RPA queue and are retained until execution ends,
+        even on timeout. Query get_rpa_result(action_id) after queued/timeout;
+        do not automatically resend.
         """
         if not str(recipient_name or "").strip():
             return _json({"status": "invalid_request", "message": "recipient_name is required"})
+        if (file_path is not None) == (file_base64 is not None):
+            return _json({"status": "invalid_request", "message": "provide exactly one of file_path or file_base64"})
+        if file_base64 is not None:
+            if not dry_run and not _mcp_write_enabled():
+                return _mcp_write_blocked("send_file_msg")
+            try:
+                data, file = decode_file_upload(file_base64, file_name)
+            except ValueError as exc:
+                return _json({"status": "invalid_request", "message": str(exc)})
+            resolved = _resolve_rpa_target(recipient_name)
+            if "error" in resolved:
+                return _rpa_target_not_found(resolved)
+            extra = {
+                "recipient_name": recipient_name, "resolved": resolved, "file": file,
+                "dry_run": dry_run, "queued": False, "completed": False, "result": None,
+                "wait_seconds": _bounded_float(wait_seconds, 12, 0, 60),
+            }
+            action_data = {
+                "target": resolved["target"], "target_username": resolved["username"],
+                "is_chatroom": bool(resolved["is_chatroom"]),
+            }
+            if dry_run:
+                return _dispatch_rpa_tool(
+                    ctx, tool_name="send_file_msg", action_type=RPAActionType.SEND_FILE.value,
+                    action_data=action_data, dry_run=True, wait_seconds=wait_seconds, extra=extra,
+                )
+            directory = None
+            transferred = False
+
+            def mark_queued() -> None:
+                nonlocal transferred
+                transferred = True
+
+            try:
+                directory = tempfile.TemporaryDirectory(prefix="wechat_ai_send_files_")
+                path = Path(directory.name) / file["file_name"]
+                # WeChat runs as a different user and must read the pasted file.
+                Path(directory.name).chmod(0o755)
+                with path.open("xb") as stream:
+                    stream.write(data)
+                path.chmod(0o644)
+                action_data["file_path"] = str(path)
+                return _dispatch_rpa_tool(
+                    ctx, tool_name="send_file_msg", action_type=RPAActionType.SEND_FILE.value,
+                    action_data=action_data, dry_run=False, wait_seconds=wait_seconds, extra=extra,
+                    on_complete=directory.cleanup, on_queued=mark_queued,
+                )
+            except Exception:
+                logger.exception("File upload dispatch failed")
+                return _json({
+                    **extra, "status": "error", "queued": transferred,
+                    "message": "Unable to stage or dispatch the uploaded file",
+                })
+            finally:
+                # The worker owns cleanup after queue insertion, including timeout.
+                if directory is not None and not transferred:
+                    directory.cleanup()
         path = Path(str(file_path or "")).expanduser()
         if not path.is_file():
             return _json(
