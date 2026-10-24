@@ -140,7 +140,7 @@ OpenClaw 或类似支持 MCP JSON 配置的客户端可使用 Streamable HTTP：
 | 工具 | 用途 | 注意 |
 | --- | --- | --- |
 | `send_text_msg` | 文本消息入 RPA 队列并可等待执行结果 | 发送前先用 `dry_run=true` |
-| `send_file_msg` | 发送容器内可访问的本地文件 | `file_path` 必须是容器内路径 |
+| `send_file_msg` | 发送容器内本地文件或 base64 上传的文件 | `file_path` 与 `file_base64` 二选一；上传解码后最大 10 MiB |
 | `send_image_msg` | 接收 base64 图片并通过现有 RPA 文件动作按图片发送 | 无需预先上传文件；PNG/JPEG/WebP/GIF，解码后最大 10 MiB |
 | `send_voice_msg` | 将本地音频或 base64 录入微信，发送原生语音条 | 最大 10 MiB、1–55 秒；本地 RPA、PulseAudio、FFmpeg |
 | `get_rpa_result` | 按 `action_id` 查询原任务结果，不重新提交 | 用于 `queued` / `timeout` 后确认最终状态 |
@@ -202,7 +202,7 @@ MCP 工具参数一律使用 `snake_case`，不要把 Web API、RPA action 或�
 | 工具 | 参数 | 说明 |
 | --- | --- | --- |
 | `send_text_msg` | `recipient_name: str`，`message: str`，`at_user_name: str \| null = null`，`dry_run: bool = false`，`wait_seconds: float = 12` | 给联系人或群聊发文本。群聊 @ 使用 `at_user_name`，不要把 `@成员名` 手写进 `message`。 |
-| `send_file_msg` | `recipient_name: str`，`file_path: str`，`dry_run: bool = false`，`wait_seconds: float = 12` | `file_path` 必须是容器内可读文件路径，例如 `/config/exports/report.pdf`。 |
+| `send_file_msg` | `recipient_name: str`，`file_path: str \| null = null`，`dry_run: bool = false`，`wait_seconds: float \| null = 12`，`file_base64: str \| null = null`，`file_name: str \| null = null` | `file_path` 与 `file_base64` 必须且只能提供一种。路径须在容器内可读；上传支持裸 base64 或 Data URI，解码后最大 10 MiB。 |
 | `send_voice_msg` | `recipient_name: str`，`file_path: str \| null = null`，`audio_base64: str \| null = null`，`dry_run: bool = false`，`wait_seconds: float \| null = 12` | 两种音频输入必须且只能提供一种。发送原生语音条；不支持 @，不包含 TTS。 |
 | `send_image_msg` | `recipient_name: str`，`image_base64: str`，`mime_type: str \| null = "image/png"`，`file_name: str \| null = null`，`dry_run: bool = false`，`wait_seconds: float \| null = 12` | 支持裸 base64 或 `data:image/png;base64,` 前缀；真实格式以文件头为准，MIME 与扩展名自动纠正。不支持 `at_user_name`。 |
 | `send_pat_msg` | `user_name: str`，`room_name: str \| null = null`，`dry_run: bool = false`，`wait_seconds: float = 12` | 私聊拍一拍只传 `user_name`；群聊拍一拍传 `room_name` 和群内成员 `user_name`。 |
@@ -212,6 +212,27 @@ MCP 工具参数一律使用 `snake_case`，不要把 Web API、RPA action 或�
 | `invite_room_member` | `room_name: str`，`user_name: str`，`dry_run: bool = false`，`wait_seconds: float = 12`，`confirm: bool = false` | 邀请联系人进群；真实执行必须 `confirm=true`。 |
 | `rename_room_name` | `room_name: str`，`new_name: str`，`dry_run: bool = false`，`wait_seconds: float = 25`，`confirm: bool = false` | 修改群名；真实执行必须 `confirm=true`。 |
 | `rename_name_in_room` | `room_name: str`，`new_name_in_room: str`，`dry_run: bool = false`，`wait_seconds: float = 25`，`confirm: bool = false` | 修改当前账号在群里的昵称；真实执行必须 `confirm=true`。 |
+
+### 文件上传与发送
+
+`send_file_msg` 保留 `file_path` 方式，同时支持直接传 `file_base64`，两者必须且只能提供一种。上传无需预先访问容器文件系统，例如：
+
+```json
+{
+  "tool": "send_file_msg",
+  "arguments": {
+    "recipient_name": "文件传输助手",
+    "file_base64": "aGVsbG8K",
+    "file_name": "hello.txt",
+    "dry_run": true
+  }
+}
+```
+
+- 支持标准裸 base64 和 `data:application/pdf;base64,...` 等 Data URI（包括 `data:text/plain;charset=utf-8;base64,...`）。不接受中间换行或 URL-safe base64；解码后必须非空，最大 **10 MiB（10,485,760 字节）**，不限文件格式。此限制只针对上传，不改变本地路径发送。
+- `file_name` 默认为 `file.bin`。自动去掉目录部分（包括 Windows 路径）、不可打印字符及首尾空格和点，保留文件扩展名；清理后为空则使用默认名，超过 255 UTF-8 字节则拒绝。微信读取的暂存文件使用清理后的文件名；响应 `file` 字段包含 `file_name` 与 `bytes`，不回显 base64。
+- `dry_run=true` 只解码校验并解析目标，不落盘、不入队，无需开启写开关。真实发送需要 `WECHAT_AI_MCP_WRITE_ENABLED=true` 和本地 RPA 队列。
+- 上传文件暂存于 `wechat_ai_send_files_*` 系统临时目录，入队前失败立即清理；入队后在执行结束时清理，包括失败和异常。`queued` / `timeout` 时文件会保留到执行结束，请通过 `get_rpa_result(action_id)` 查询，不要自动重发。
 
 ### 图片上传与发送
 
