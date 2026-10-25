@@ -146,6 +146,40 @@ def test_media_requires_matching_content_hash(db, tmp_path, kind, matching):
             verifier.verify(action)
 
 
+@pytest.mark.parametrize("kind", [MessageType.File, MessageType.FileWait])
+@pytest.mark.parametrize("tag", ["md5", "filemd5"])
+@pytest.mark.parametrize("wrapped", [True, False])
+@pytest.mark.parametrize("attachment", ["<appattach/>", "<appattach><md5> </md5><filemd5/></appattach>"])
+def test_file_hash_directly_under_appmsg(db, tmp_path, kind, tag, wrapped, attachment):
+    path = tmp_path / "report.txt"
+    path.write_bytes(b"file verification regression")
+    digest = hashlib.md5(path.read_bytes()).hexdigest()
+    verifier, action = prepared(db, SendFileAction(file_path=str(path), target="Alice"))
+    text = f"<appmsg>{attachment}<{tag}> {digest.upper()} </{tag}></appmsg>"
+    if wrapped:
+        text = f"<msg>{text}</msg>"
+    db.get_messages_by_username.return_value = [row(kind=kind, text=text)]
+    assert verifier.verify(action)["verified"]
+
+
+@pytest.mark.parametrize("content", [
+    "<appattach/><md5>different-file</md5>",
+    "<appattach/><refermsg><md5>{digest}</md5></refermsg>",
+    "<appattach/><refermsg><appmsg><md5>{digest}</md5></appmsg></refermsg>",
+    "<appattach><md5>different-file</md5></appattach><md5>{digest}</md5>",
+    "<appattach/><md5/>",
+])
+def test_file_hash_fallback_rejects_unrelated_or_conflicting_hashes(db, tmp_path, content):
+    path = tmp_path / "report.txt"
+    path.write_bytes(b"file verification regression")
+    digest = hashlib.md5(path.read_bytes()).hexdigest()
+    verifier, action = prepared(db, SendFileAction(file_path=str(path), target="Alice"))
+    text = "<msg><appmsg>" + content.format(digest=digest) + "</appmsg></msg>"
+    db.get_messages_by_username.return_value = [row(kind=MessageType.File, text=text)]
+    with pytest.raises(SendVerificationError, match="timeout"):
+        verifier.verify(action)
+
+
 def controller_for(db, handler, monkeypatch):
     controller = object.__new__(RPAController)
     controller.db = db
@@ -160,7 +194,7 @@ def controller_for(db, handler, monkeypatch):
     return controller
 
 
-@pytest.mark.parametrize("kind", ["text", "image"])
+@pytest.mark.parametrize("kind", ["text", "image", "file"])
 @pytest.mark.parametrize("confirmed", [True, False])
 def test_bridge_returns_verified_result_or_failed_and_never_retries(db, monkeypatch, tmp_path, kind, confirmed):
     path = tmp_path / "test.png"
@@ -170,7 +204,11 @@ def test_bridge_returns_verified_result_or_failed_and_never_retries(db, monkeypa
     def send(action):
         if confirmed:
             db.get_messages_by_username.return_value = [
-                row() if kind == "text" else row(kind=MessageType.Image, text=f'<msg><img md5="{digest}"/></msg>')
+                row() if kind == "text" else (
+                    row(kind=MessageType.Image, text=f'<msg><img md5="{digest}"/></msg>') if kind == "image"
+                    else row(kind=MessageType.File,
+                             text=f"<msg><appmsg><appattach/><md5>{digest}</md5></appmsg></msg>")
+                )
             ]
         return True  # Button clicked, even when WeChat is frozen.
 
