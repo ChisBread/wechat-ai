@@ -16,6 +16,8 @@ class VoiceTranscriptionService:
         self._lock = Lock()
         self._pending = set()
         self._completed = OrderedDict()
+        self._retried = 0
+        self._failed = 0
 
     def submit(self, message, deliver):
         """Return True when delivery is deferred or this message is a duplicate."""
@@ -35,30 +37,55 @@ class VoiceTranscriptionService:
                 return False
             self._pending.add(key)
 
-        action = TranscribeVoiceAction(
-            target=contact.display_name, target_username=contact.username,
-            server_id=str(message.server_id), message_db_path=message.message_db_path,
-            timeout=self.timeout,
-        )
+        def make_action(attempt):
+            action = TranscribeVoiceAction(
+                target=contact.display_name, target_username=contact.username,
+                server_id=str(message.server_id), message_db_path=message.message_db_path,
+                timeout=self.timeout,
+            )
+            handled = False
 
-        def finish():
-            with self._lock:
-                if key not in self._pending:
-                    return
-                self._pending.remove(key)
-                self._completed[key] = None
-                while len(self._completed) > 1024:
-                    self._completed.popitem(last=False)
-            result = action.execution_result
-            if result.get("verified") and result.get("voice_to_text"):
-                message.audio_text = result["voice_to_text"]
-            else:
-                self.logger.warning("Voice transcription incomplete for %s: %s",
-                                    message.server_id, result.get("error", "RPA unavailable"))
-            # Deliver once, including on failure; never replay through submit().
-            deliver(message)
+            def finish():
+                nonlocal handled
+                with self._lock:
+                    if handled or key not in self._pending:
+                        return
+                    handled = True
+                result = action.execution_result
+                text = result.get("voice_to_text") or ""
+                success = bool(result.get("verified") and text.strip())
+                if not success and attempt == 0:
+                    self.logger.warning("Retrying voice transcription for %s after: %s",
+                                        message.server_id, result.get("error", "RPA unavailable"))
+                    try:
+                        # Keep the key pending and use a fresh action/callback.
+                        # Queue at the tail so other RPA work can run first.
+                        self.task_queue.put_nowait(make_action(1))
+                    except Exception:
+                        self.logger.exception("Could not enqueue voice transcription retry")
+                    else:
+                        with self._lock:
+                            self._retried += 1
+                        return
+                with self._lock:
+                    self._pending.remove(key)
+                    self._completed[key] = None
+                    if not success:
+                        self._failed += 1
+                    while len(self._completed) > 1024:
+                        self._completed.popitem(last=False)
+                if success:
+                    message.audio_text = text
+                else:
+                    self.logger.warning("Voice transcription incomplete for %s: %s",
+                                        message.server_id, result.get("error", "RPA unavailable"))
+                # Deliver once after success or the final failure.
+                deliver(message)
 
-        action.on_complete = finish
+            action.on_complete = finish
+            return action
+
+        action = make_action(0)
         try:
             self.task_queue.put_nowait(action)
         except Exception:
@@ -71,4 +98,5 @@ class VoiceTranscriptionService:
     def get_status(self):
         with self._lock:
             return {"enabled": self.enabled, "pending": len(self._pending),
-                    "completed": len(self._completed)}
+                    "completed": len(self._completed), "retried": self._retried,
+                    "failed": self._failed}

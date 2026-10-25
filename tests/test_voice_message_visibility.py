@@ -71,6 +71,11 @@ def test_all_lists_wait_for_database_transcript_even_before_enqueue_and_after_ti
         request.execution_result.update(verified=False, error="timeout")
         request.on_complete()
         check(False)
+        retry = queue.get_nowait()
+        retry.execution_result.update(verified=False, error="timeout")
+        retry.on_complete()
+        assert bot.voice_transcription_service.get_status()["pending"] == 0
+        check(False)
         # Late persistence or a manual retry should make the same ID appear once.
         packed = PackedInfoData()
         packed.info.audioTxt = "识别完成"

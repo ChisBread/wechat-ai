@@ -58,6 +58,15 @@ def test_completion_delivers_once_and_duplicate_notifications_are_ignored(succes
         action.execution_result.update(verified=True, voice_to_text="识别结果")
     action.on_complete()
     action.on_complete()
+    if not success:
+        deliver.assert_not_called()
+        assert service.submit(voice(), deliver)
+        retry = queue.get_nowait()
+        assert retry is not action
+        retry.on_complete()
+        retry.on_complete()
+        assert service.get_status()["retried"] == 1
+        assert service.get_status()["failed"] == 1
     deliver.assert_called_once_with(message)
     assert message.audio_text == ("识别结果" if success else "")
     assert service.submit(voice(), deliver)
@@ -138,14 +147,18 @@ def test_click_does_not_imply_transcription_success(monkeypatch):
 
 
 @pytest.mark.parametrize("label, expected", [("语音转文字", True), ("转文字", True),
+                                            ("图语音转文字", True), ("▢语音转文字", True),
+                                            ("图标语音转文字", True), ("语音转文", False),
+                                            ("abc语音转文字", False), ("语音转文字中", False),
                                             ("收起文字", False), ("删除", False)])
-def test_menu_only_clicks_exact_transcription_labels(monkeypatch, label, expected):
+@pytest.mark.parametrize("anchor", ["收藏", "图收藏"])
+def test_menu_only_clicks_complete_transcription_labels(monkeypatch, label, expected, anchor):
     import wechat_ai_bot.rpa.action_handlers.transcribe_voice_handler as module
     item = handler()
     item.image_processor = Mock()
     item.ocr_processor = Mock()
     item.ocr_processor.process_image.return_value = [
-        {"label": "收藏", "pixel_bbox": [10, 80, 80, 100]},
+        {"label": anchor, "pixel_bbox": [10, 80, 80, 100]},
         {"label": label, "pixel_bbox": [10, 20, 110, 40]},
     ]
     mouse = Mock()
@@ -156,15 +169,16 @@ def test_menu_only_clicks_exact_transcription_labels(monkeypatch, label, expecte
     assert mouse.click.call_count == int(expected)
 
 
-def test_menu_prefers_popup_over_inline_hint(monkeypatch):
+@pytest.mark.parametrize("prefix", ["", "图"])
+def test_menu_prefers_popup_over_inline_hint(monkeypatch, prefix):
     import wechat_ai_bot.rpa.action_handlers.transcribe_voice_handler as module
     item = handler()
     item.image_processor = Mock()
     item.ocr_processor = Mock()
     item.ocr_processor.process_image.return_value = [
         {"label": "转文字", "pixel_bbox": [50, 5, 100, 20]},
-        {"label": "语音转文字", "pixel_bbox": [10, 30, 110, 50]},
-        {"label": "收藏", "pixel_bbox": [10, 80, 60, 100]},
+        {"label": prefix + "语音转文字", "pixel_bbox": [10, 30, 110, 50]},
+        {"label": prefix + "收藏", "pixel_bbox": [10, 80, 60, 100]},
     ]
     mouse = Mock()
     mouse.position.return_value = (400, 1600)
@@ -248,3 +262,71 @@ def test_native_transcript_is_flushed_by_leaving_and_returning(monkeypatch):
     monkeypatch.setattr(module.time, "sleep", lambda _: None)
     item._flush_client_transcript(action())
     assert [call.args for call in item.window_manager.switch_session.call_args_list] == [("Myself",), ("Alice",)]
+
+
+def test_failed_transcription_retries_at_queue_tail_then_delivers_success_once():
+    queue, deliver = Queue(), Mock()
+    service = VoiceTranscriptionService(queue, enabled=True)
+    message = voice()
+    assert service.submit(message, deliver)
+    first = queue.get_nowait()
+    unrelated = object()
+    queue.put_nowait(unrelated)
+    first.execution_result.update(error="menu mismatch")
+    first.on_complete()
+    first.on_complete()
+    deliver.assert_not_called()
+    assert service.get_status()["pending"] == 1
+    assert service.submit(voice(), deliver)
+    assert queue.get_nowait() is unrelated
+    retry = queue.get_nowait()
+    assert (retry.server_id, retry.target_username, retry.message_db_path) == (
+        first.server_id, first.target_username, first.message_db_path)
+    retry.execution_result.update(verified=True, voice_to_text="重试成功")
+    retry.on_complete()
+    retry.on_complete()
+    first.on_complete()
+    deliver.assert_called_once_with(message)
+    assert message.audio_text == "重试成功"
+    assert queue.empty()
+    assert service.get_status() == dict(enabled=True, pending=0, completed=1, retried=1, failed=0)
+
+
+def test_retry_queue_full_finishes_without_stuck_pending_or_duplicate_delivery():
+    queue, deliver = Queue(maxsize=1), Mock()
+    service = VoiceTranscriptionService(queue, enabled=True)
+    message = voice()
+    service.submit(message, deliver)
+    first = queue.get_nowait()
+    unrelated = object()
+    queue.put_nowait(unrelated)
+    first.on_complete()
+    first.on_complete()
+    deliver.assert_called_once_with(message)
+    assert service.get_status() == dict(enabled=True, pending=0, completed=1, retried=0, failed=1)
+    assert queue.get_nowait() is unrelated
+
+
+@pytest.mark.parametrize("items", [
+    [{"label": "图语音转文字", "pixel_bbox": [10, 20, 110, 40]}],
+    [{"label": "图收藏", "pixel_bbox": [10, 80, 80, 100]},
+     {"label": "语音转文", "pixel_bbox": [10, 20, 110, 40]}],
+    [{"label": "图收藏", "pixel_bbox": [200, 80, 280, 100]},
+     {"label": "图语音转文字", "pixel_bbox": [10, 20, 110, 40]}],
+    [{"label": "图收藏"}, {"label": "图语音转文字"}],
+])
+def test_menu_misses_log_ocr_labels_without_clicking(monkeypatch, caplog, items):
+    import wechat_ai_bot.rpa.action_handlers.transcribe_voice_handler as module
+    item = handler()
+    item.image_processor = Mock()
+    item.ocr_processor = Mock()
+    item.ocr_processor.process_image.return_value = items
+    mouse = Mock()
+    mouse.position.return_value = (400, 1600)
+    mouse.size.return_value = SimpleNamespace(width=1920, height=1916)
+    monkeypatch.setattr(module, "mouse", mouse)
+    with caplog.at_level(logging.WARNING):
+        assert not item._click_transcribe_menu()
+    mouse.click.assert_not_called()
+    assert "OCR labels=" in caplog.text
+    assert items[0]["label"] in caplog.text

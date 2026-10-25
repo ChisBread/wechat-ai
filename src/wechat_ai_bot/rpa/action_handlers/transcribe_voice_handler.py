@@ -83,25 +83,40 @@ class TranscribeVoiceHandler(BaseActionHandler):
         if shot is None:
             return False
         items = self.ocr_processor.process_image(image=shot)
-        labels = {str(item.get("label", "")).strip() for item in items}
-        if not labels.intersection({"收藏", "多选", "删除"}):
+        # Bound diagnostic output: the screenshot may include surrounding chat.
+        labels = [str(item.get("label", ""))[:80] for item in items[:30]]
+        entries = [(self._menu_label(item), item.get("pixel_bbox")) for item in items]
+        if not any(box and self._label_matches(label, expected)
+                   for label, box in entries for expected in ("收藏", "多选", "删除")):
+            self.logger.warning("Voice menu not identified; OCR labels=%r", labels)
             return False
         self._menu_visible = True
         # Prefer the actual menu label over a simultaneously visible inline
         # 转文字 hint behind the popup. Clicking the hint only dismisses it.
-        anchors = [item["pixel_bbox"] for item in items
-                   if str(item.get("label", "")).strip() == "收藏"]
-        for label in ("语音转文字", "转文字"):
-            for item in items:
-                if str(item.get("label", "")).strip() != label:
+        anchors = [box for label, box in entries
+                   if box and self._label_matches(label, "收藏")]
+        for expected in ("语音转文字", "转文字"):
+            for label, box in entries:
+                if not box or not self._label_matches(label, expected):
                     continue
-                x1, y1, x2, y2 = item["pixel_bbox"]
+                x1, y1, x2, y2 = box
                 if not any(abs(x1 - anchor[0]) < 24 and 0 < anchor[1] - y1 < 100
                            for anchor in anchors):
                     continue
                 mouse.click(left + int((x1 + x2) / 2), top + int((y1 + y2) / 2))
                 return True
+        self.logger.warning("Voice transcription menu item not matched/aligned; OCR labels=%r", labels)
         return False
+
+    @staticmethod
+    def _menu_label(item):
+        # OCR can merge the menu icon with its text, e.g. 图语音转文字 / 图收藏.
+        return re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", str(item.get("label", "")))
+
+    @staticmethod
+    def _label_matches(normalized, expected):
+        # Require the full label, tolerating at most two leading icon characters.
+        return normalized.endswith(expected) and len(normalized) <= len(expected) + 2
 
     def _flush_client_transcript(self, action):
         # Linux WeChat 4.1.13 can display a transcript without persisting it.
@@ -149,7 +164,7 @@ class TranscribeVoiceHandler(BaseActionHandler):
                 mouse.click(region[0] + int((x1 + x2) / 2),
                             region[1] + int((y1 + y2) / 2), button="right")
                 time.sleep(0.3)
-                # Exact menu match: never click Forward, Delete or other items.
+                # Require the complete menu label and its position above 收藏.
                 self._menu_visible = False
                 clicked = self._click_transcribe_menu()
                 if clicked:
@@ -171,7 +186,8 @@ class TranscribeVoiceHandler(BaseActionHandler):
             raise RuntimeError("WeChat transcript unavailable before timeout; message may be outside the visible recent history")
         except Exception as exc:
             action.execution_result["error"] = str(exc)
-            self.logger.warning("Voice transcription failed: %s", exc)
+            self.logger.warning("Voice transcription failed for %s (triggered=%s): %s",
+                                action.server_id, action.execution_result["triggered"], exc)
             return False
         finally:
             if touched_ui:
