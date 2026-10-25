@@ -169,4 +169,15 @@ class SendVerifier:
                 for tag in ("md5", "filemd5")
                 for node in attach.iter(tag)
             ]
+            if not any(value.strip() for value in hashes):
+                # WeChat 4.1 also stores the file hash directly under appmsg.
+                # Do not scan arbitrary descendants: quoted/embedded messages
+                # can contain hashes for a different attachment.
+                appmsgs = [root] if root.tag == "appmsg" else root.findall("appmsg")
+                hashes = [
+                    node.text or ""
+                    for appmsg in appmsgs
+                    for tag in ("md5", "filemd5")
+                    for node in appmsg.findall(tag)
+                ]
         return self.file_md5 in {value.strip().lower() for value in hashes}
