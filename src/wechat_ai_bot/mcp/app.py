@@ -32,11 +32,13 @@ from wechat_ai_bot.mcp.dispatchers import (
 )
 from wechat_ai_bot.mcp.file_upload import decode_file_upload
 from wechat_ai_bot.mcp.image_upload import decode_image_upload
+from wechat_ai_bot.mcp.message_visibility import get_display_messages
 from wechat_ai_bot.mcp.protocols import CommandDispatcher
 from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.rpa.rpa_action import RPAActionType
 from wechat_ai_bot.rpa.voice_audio import prepare_voice
-from wechat_ai_bot.weixin.message_content import chat_message_text, contact_in_chat
+from wechat_ai_bot.weixin.message_content import chat_message_text, contact_in_chat, message_content_text
+from wechat_ai_bot.weixin.parser.audio_parser import audio_transcript
 from wechat_ai_bot.weixin.message_classes import MessageType
 
 logger = logging.getLogger(__name__)
@@ -572,10 +574,18 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 chat_username=chat_username,
                 sender_username=getattr(sender, "username", ""),
             )
+        elif include_text and local_type == MessageType.Audio:
+            transcript = audio_transcript(
+                message_content_text(row[12] if len(row) > 12 else "",
+                                     row[15] if len(row) > 15 else None),
+                row[14] if len(row) > 14 else None,
+            )
+            payload["voice_to_text"] = transcript
+            payload["text"] = f"【语音】{transcript}"
         return payload
 
     def _rows_for_contact(db: Any, contact: Any, limit: int, order: str = "desc") -> list[tuple]:
-        rows = db.get_messages_by_username(contact.username, count=limit, order=order)
+        rows = get_display_messages(db, contact.username, count=limit, order=order, bot=bot)
         if str(order).lower() != "asc":
             rows.reverse()
         return rows
@@ -962,7 +972,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         chats: list[dict[str, Any]] = []
         for username in username_map.keys():
             try:
-                rows = db.get_messages_by_username(username, count=1)
+                rows = get_display_messages(db, username, count=1, bot=bot)
             except Exception:
                 continue
             if not rows:
@@ -1149,7 +1159,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 }
             )
         bounded_limit = max(1, min(int(limit or 40), 120))
-        rows = db.get_messages_by_username(contact.username, count=bounded_limit)
+        rows = get_display_messages(db, contact.username, count=bounded_limit, bot=bot)
         rows.reverse()
         messages = [_message_payload(db, row, include_text=True, chat_username=contact.username if contact else "") for row in rows]
         return _json(

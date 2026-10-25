@@ -26,6 +26,7 @@ from wechat_ai_bot.services.core.message_service import MessageService
 from wechat_ai_bot.services.core.mqtt_service import MQTTService
 from wechat_ai_bot.services.core.processor_service import ProcessorService
 from wechat_ai_bot.services.core.rpa_service import RPAService
+from wechat_ai_bot.services.core.voice_transcription_service import VoiceTranscriptionService
 from wechat_ai_bot.services.core.visual_message_service import VisualMessageService
 from wechat_ai_bot.services.functional.weixin_status_service import WeixinStatusService
 from wechat_ai_bot.utils.helpers import ensure_dir_exists
@@ -114,6 +115,11 @@ class Bot:
         )
 
         # Processor (portable)
+        self.voice_transcription_service = VoiceTranscriptionService(
+            self.rpa_task_queue,
+            enabled=bool(self.database_service) and self.config.get("voice_transcription.enabled", False),
+            timeout=self.config.get("voice_transcription.timeout", 20),
+        )
         self.processor_service = ProcessorService(
             user_info=self.user_info,
             message_queue=self.message_queue,
@@ -121,6 +127,7 @@ class Bot:
             db=self.database_service,
             message_factory_service=self.message_factory_service,
             plugin_manager=self.plugin_manager,
+            voice_transcription=self.voice_transcription_service,
         )
 
         # RPA service (portable)

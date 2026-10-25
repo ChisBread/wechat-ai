@@ -100,6 +100,7 @@ class RPAController:
             RenameRoomNameHandler,
             SendFileHandler,
             SendVoiceHandler,
+            TranscribeVoiceHandler,
             SendTextMessageHandler,
         )
 
@@ -107,6 +108,7 @@ class RPAController:
             (RPAActionType.SEND_TEXT_MESSAGE, SendTextMessageHandler),
             (RPAActionType.SEND_FILE, SendFileHandler),
             (RPAActionType.SEND_VOICE, SendVoiceHandler),
+            (RPAActionType.TRANSCRIBE_VOICE, TranscribeVoiceHandler),
             (RPAActionType.PAT, PatHandler),
             (RPAActionType.PUBLIC_ROOM_ANNOUNCEMENT, PublicRoomAnnouncementHandler),
             (RPAActionType.DOWNLOAD_IMAGE, DownloadImageHandler),

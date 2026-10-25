@@ -65,6 +65,13 @@ for examples, MIME correction, and completion/timeout semantics.
 
 Media notes:
 
+- Set `voice_transcription.enabled: true` in `config/config.yaml` and restart
+  the bot to automatically request WeChat's own transcription for incoming
+  voice messages. It shares the RPA queue and verifies results by the original
+  message ID in the database. This is client transcription, not local ASR.
+  It requires the Chinese 转文字 menu and recent visible incoming bubbles;
+  failures deliver the original voice message without repeated UI retries.
+
 - `send_voice_msg` sends native voice bubbles from a local audio file or base64
   using FFmpeg and an isolated PulseAudio microphone. Inputs are limited to
   10 MiB and 1–55 seconds. Requires Linux WeChat 4.1.13's light theme at 100%

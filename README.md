@@ -124,6 +124,12 @@ WECHAT_AI_MCP_WRITE_ENABLED=true   # 允许 send_text_msg、send_file_msg、群�
 
 联系人和消息读取：
 
+收到语音后可自动调用微信自身的“转文字”：在 `config/config.yaml` 设置
+`voice_transcription.enabled: true`（默认关闭），重启 bot 后生效。转写与其他
+RPA 操作共用队列，结果按原消息 ID 从数据库回读，交给插件并通过 MCP 返回。
+这是微信客户端识别，不是本地 ASR；依赖中文界面的“转文字”菜单与可见的最近语音。
+失败或超时保留原语音继续处理，不自动反复点击；详见[语音转写](docs/mcp.md#语音转写)。
+
 - `search_contacts`：按微信 ID、备注、昵称、alias 搜索联系人或群聊。
 - `get_contact_detail`：查看单个联系人/群聊详情。
 - `get_recent_chats`：列出最近有消息表的会话。

@@ -19,7 +19,7 @@ from wechat_ai_bot.models import UserInfo
 
 from .message_classes import *
 from .message_content import message_content_text
-from .parser.audio_parser import parser_audio
+from .parser.audio_parser import parser_audio, audio_transcript
 from .parser.emoji_parser import parser_emoji
 from .parser.file_parser import parse_video
 from .parser.link_parser import (
@@ -39,7 +39,6 @@ from .parser.link_parser import (
 )
 from .parser.util.common import get_md5_from_xml
 from .parser.util.protocbuf import (
-    packed_info_data_pb2,
     packed_info_data_img2_pb2,
     packed_info_data_img_pb2,
     packed_info_data_merged_pb2,
@@ -286,20 +285,7 @@ class AudioMessageFactory(MessageFactory):
         )
         audio_dic = parser_audio(msg.parsed_content)
         audio_length = audio_dic.get("audio_length", 0)
-        audio_text = audio_dic.get("audio_text", "")
-        if not audio_text:
-            try:
-                packed_info_data_proto = packed_info_data_pb2.PackedInfoData()
-                packed_info_data_proto.ParseFromString(message[14])
-                packed_info_data = MessageToDict(packed_info_data_proto)
-                audio_text = packed_info_data.get("info", {}).get("audioTxt", "")
-            except Exception:
-                audio_text = ""
-
-        if not audio_text:
-            # TODO: 语音转文字逻辑可能需要延迟处理或异步获取
-            # print(f"音频消息没有音频文字，需要延迟处理一下")
-            pass
+        audio_text = audio_transcript(msg.parsed_content, message[14])
 
         msg.audio_text = audio_text
         msg.duration = audio_length
