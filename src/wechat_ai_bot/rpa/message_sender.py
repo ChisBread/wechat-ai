@@ -5,12 +5,15 @@
 
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import wechat_ai_bot.utils.mouse as pyautogui
 from Levenshtein import ratio
+from PIL import ImageChops
+from wechat_ai_bot.rpa.editor import enabled_send_button
 from wechat_ai_bot.utils.helpers import (
     get_center_point,
+    get_clipboard_text,
     read_temp_image,
     save_clipboard_image_to_temp,
     set_clipboard_text,
@@ -57,11 +60,21 @@ class MessageSender:
                 time.sleep(0.3)
                 pyautogui.press("delete")
                 time.sleep(0.3)
+            prefix = "" if clear_input_box else self._read_input_text()
+            if prefix is None:
+                self.logger.warning("Cannot read the existing draft; send aborted")
+                return False
             if not set_clipboard_text(message):
                 return False
             pyautogui.hotkey("ctrl", "v")
             time.sleep(0.3)
-            send_button = self.window_manager.get_icon_position("send_button")
+            actual = self._read_input_text()
+            expected = prefix + message
+            if actual is None or actual.replace("\r\n", "\n") != expected.replace("\r\n", "\n"):
+                self.logger.warning("Editor did not contain the intended text; send aborted")
+                self.clear_input_box()
+                return False
+            send_button = enabled_send_button(self.window_manager)
             if send_button:
                 center = get_center_point(send_button)
                 pyautogui.click(center[0], center[1])
@@ -116,218 +129,191 @@ class MessageSender:
         return save_clipboard_image_to_temp()
 
     def mention_user(self, at_str: str) -> bool:
-        """
-        @用户。
-        Args:
-            at_str (str): 用户名。
-        Returns:
-            bool: 是否成功。
-        """
-        if not at_str:
-            return False
+        """Click a unique exact candidate and verify the inserted mention before sending."""
         mention_name = self._normalize_mention_name(at_str)
         if not mention_name:
             return False
-        if not self.window_manager.activate_input_box():
-            return False
-        # xdotool expects the X11 keysym name. Passing "@" is ignored on some
-        # layouts, which leaves plain text like "Bread_" in the input box.
-        pyautogui.press("at")
-        time.sleep(0.3)
-        if not set_clipboard_text(mention_name):
-            self.logger.error("设置剪贴板文本时出错")
-            return False
-        pyautogui.hotkey("ctrl", "v")
-        time.sleep(0.5)
-        if not self._select_mention_candidate_with_enter(mention_name):
-            self.logger.warning("未能确认 @ 候选: %s", mention_name)
-            return False
-        time.sleep(0.3)
-        return True
-
-    def _select_mention_candidate_with_enter(self, mention_name: str) -> bool:
-        candidate = self._find_mention_candidate(mention_name)
-        if not candidate:
-            return False
-        best, _region = candidate
-        self.logger.info(
-            "Selecting @ candidate %r with Enter bbox=%s score=%.3f",
-            best.get("label"),
-            best.get("pixel_bbox"),
-            best.get("mention_score", 0),
-        )
+        selected = False
         try:
-            pyautogui.press("enter")
+            # Start with an empty draft, so copied text can verify the whole mention.
+            if not self.clear_input_box():
+                return False
+            send_button = self.window_manager.get_icon_position("send_button")
+            region = self._mention_candidate_region(send_button)
+            if not region:
+                return False
+            before = self.window_manager.image_processor.take_screenshot(region=region)
+            if before is None:
+                return False
+
+            # xdotool expects the X11 keysym, not a literal "@".
+            pyautogui.press("at")
+            time.sleep(0.3)
+            if not set_clipboard_text(mention_name):
+                return False
+            pyautogui.hotkey("ctrl", "v")
             time.sleep(0.5)
+            if not self._click_mention_candidate(mention_name, region, before):
+                self.logger.warning("未找到唯一且精确匹配的 @ 候选: %s", mention_name)
+                return False
+            time.sleep(0.5)
+            selected = self._input_contains_mention(mention_name)
+            if not selected:
+                self.logger.warning("选中的 @ 与目标不符或无法确认: %s", mention_name)
+            return selected
         except Exception as exc:
-            self.logger.warning("按 Enter 选择 @ 候选失败: %s", exc)
+            self.logger.warning("选择 @ 候选失败: %s", exc)
             return False
-        if not self._input_contains_mention(mention_name):
-            self.logger.debug("未能通过 OCR 确认 @ 候选已选中: %s", mention_name)
-        return True
+        finally:
+            if not selected:
+                # A failed click/search must not leave an unsafe draft for a later send.
+                try:
+                    # Escape hides Linux WeChat when no popup remains. Focus
+                    # and clear the editor instead of hiding the main window.
+                    self.clear_input_box()
+                except Exception as exc:
+                    self.logger.warning("清理未确认的 @ 草稿失败: %s", exc)
+
+    def _read_input_text(self) -> Optional[str]:
+        """Read the focused editor without leaving the draft selected."""
+        if not set_clipboard_text(""):
+            return None
+        pyautogui.hotkey("ctrl", "a")
+        try:
+            pyautogui.hotkey("ctrl", "c")
+            time.sleep(0.3)
+            return get_clipboard_text()
+        finally:
+            pyautogui.press("Right")
 
     def _input_contains_mention(self, mention_name: str) -> bool:
-        image_processor = getattr(self.window_manager, "image_processor", None)
-        ocr_processor = getattr(self.window_manager, "ocr_processor", None)
-        send_button = self.window_manager.get_icon_position("send_button")
-        if not image_processor or not ocr_processor or not send_button:
+        # Compare the complete text, not an OCR substring (@Yang contains @y).
+        text = self._read_input_text()
+        if text is None:
             return False
-
-        region = self._input_state_region(send_button)
-        if not region:
+        # Linux WeChat copies mention chips with a leading U+2005 separator.
+        text = text.removeprefix("\u2005")
+        prefix = f"@{mention_name}"
+        if not text.startswith(prefix):
             return False
-
-        try:
-            screenshot = image_processor.take_screenshot(
-                region=region,
-                save_path="/config/runtime_images/mention_input_state.png",
-            )
-            if screenshot is None:
-                return False
-            results = ocr_processor.process_image(image=screenshot)
-        except TypeError:
-            screenshot = image_processor.take_screenshot(region=region)
-            if screenshot is None:
-                return False
-            results = ocr_processor.process_image(image=screenshot)
-        except Exception as exc:
-            self.logger.debug("Failed to OCR @ input state: %s", exc)
-            return False
-
-        needle = f"@{mention_name}".lower().replace(" ", "")
-        for result in results or []:
-            label = str(result.get("label") or "").lower().replace(" ", "")
-            if needle in label:
-                return True
-        return False
-
-    def _input_state_region(self, send_button: List[int]) -> Optional[List[int]]:
-        try:
-            _send_x, send_y = get_center_point(send_button)
-            x = int(getattr(self.window_manager, "MSG_TOP_X", 0) or 0)
-            width = int(getattr(self.window_manager, "MSG_WIDTH", 0) or 0)
-            y = max(int(getattr(self.window_manager, "MSG_TOP_Y", 0) or 0), int(send_y) - 72)
-            height = max(40, int(send_y) - y + 12)
-            if width <= 0 or height <= 0:
-                return None
-            return [x, y, width, height]
-        except Exception:
-            return None
+        suffix = text[len(prefix):]
+        # WeChat appends a separator when inserting a real mention. The search
+        # text @y alone is insufficient proof that the candidate was selected.
+        return bool(suffix) and all(char in " \u2005" for char in suffix)
 
     def _normalize_mention_name(self, at_str: str) -> str:
-        name = str(at_str or "").strip().lstrip("@").strip()
-        if not name:
-            return ""
-        parts = [part.strip() for part in name.split() if part.strip()]
-        return max(parts, key=len) if parts else name
+        # Spaces and case are part of the name, not fuzzy-search hints.
+        return str(at_str or "").strip().lstrip("@").strip()
 
-    def _click_mention_candidate(self, mention_name: str) -> bool:
-        image_processor = getattr(self.window_manager, "image_processor", None)
-        ocr_processor = getattr(self.window_manager, "ocr_processor", None)
-        send_button = self.window_manager.get_icon_position("send_button")
-        if not image_processor or not ocr_processor or not send_button:
-            return False
-
-        candidate = self._find_mention_candidate(mention_name)
+    def _click_mention_candidate(self, mention_name: str, region: List[int], before: Any) -> bool:
+        candidate = self._find_mention_candidate(mention_name, region, before)
         if not candidate:
             return False
-
-        best, region = candidate
         self.logger.info(
-            "Selecting @ candidate %r bbox=%s score=%.3f",
-            best.get("label"),
-            best.get("pixel_bbox"),
-            best.get("mention_score", 0),
+            "Clicking exact @ candidate %r bbox=%s region=%s",
+            candidate["label"], candidate["pixel_bbox"], region,
         )
-        center_x, center_y = get_center_point(best["pixel_bbox"])
+        center_x, center_y = get_center_point(candidate["pixel_bbox"])
         pyautogui.click(region[0] + int(center_x), region[1] + int(center_y))
         return True
 
-    def _find_mention_candidate(self, mention_name: str) -> Optional[Tuple[Dict, List[int]]]:
-        image_processor = getattr(self.window_manager, "image_processor", None)
-        ocr_processor = getattr(self.window_manager, "ocr_processor", None)
-        send_button = self.window_manager.get_icon_position("send_button")
-        if not image_processor or not ocr_processor or not send_button:
+    def _find_mention_candidate(
+        self, mention_name: str, region: List[int], before: Any,
+    ) -> Optional[Dict]:
+        image_processor = self.window_manager.image_processor
+        ocr_processor = self.window_manager.ocr_processor
+        screenshot = image_processor.take_screenshot(
+            region=region,
+            save_path="/config/runtime_images/mention_candidates.png",
+        )
+        if screenshot is None or screenshot.size != before.size:
             return None
-
-        region = self._mention_candidate_region(send_button)
-        if not region:
-            return None
-        try:
-            screenshot = image_processor.take_screenshot(
-                region=region,
-                save_path="/config/runtime_images/mention_candidates.png",
-            )
-        except TypeError:
-            screenshot = image_processor.take_screenshot(region=region)
-        if screenshot is None:
-            return None
-
         results = ocr_processor.process_image(image=screenshot)
         candidates = self._mention_candidates(
-            mention_name,
-            results,
-            region_width=region[2],
-            region_height=region[3],
+            mention_name, results, region_width=region[2], region_height=region[3],
         )
+        candidates = [item for item in candidates if self._candidate_changed(
+            before, screenshot, item["pixel_bbox"],
+        )]
         if not candidates:
+            # The detector misses tiny one-character labels in a large capture.
+            # Isolate the changed popup before enlarging it; enlarging the whole
+            # screen gets downscaled again by the OCR detector.
+            changed = ImageChops.difference(before.convert("RGB"), screenshot.convert("RGB"))
+            box = changed.convert("L").point(lambda value: 255 if value > 8 else 0).getbbox()
+            if box and 20 <= box[2] - box[0] <= 480 and 20 <= box[3] - box[1] <= 520:
+                crop = screenshot.crop(box)
+                zoomed = crop.resize((crop.width * 3, crop.height * 3))
+                zoom_results = ocr_processor.process_image(image=zoomed)
+                translated = []
+                for item in zoom_results or []:
+                    bbox = item.get("pixel_bbox")
+                    if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                        translated.append({**item, "pixel_bbox": [
+                            box[0] + bbox[0] / 3, box[1] + bbox[1] / 3,
+                            box[0] + bbox[2] / 3, box[1] + bbox[3] / 3,
+                        ]})
+                candidates = self._mention_candidates(
+                    mention_name, translated, region_width=region[2], region_height=region[3],
+                )
+        # The capture is bounded above the editor. Unchanged history in that
+        # capture is not a popup row, even if its text exactly matches the name.
+        candidates = [item for item in candidates if self._candidate_changed(
+            before, screenshot, item["pixel_bbox"],
+        )]
+        if len(candidates) != 1:
             return None
-        return candidates[0], region
+        return candidates[0]
+
+    @staticmethod
+    def _candidate_changed(before: Any, after: Any, bbox: List[int]) -> bool:
+        box = tuple(int(value) for value in bbox)
+        difference = ImageChops.difference(
+            before.crop(box).convert("RGB"), after.crop(box).convert("RGB"),
+        ).convert("L")
+        histogram = difference.histogram()
+        # Ignore tiny rendering noise; require a visible change inside the label.
+        changed = sum(histogram[24:])
+        return changed >= max(2, difference.width * difference.height * 0.02)
 
     def _mention_candidate_region(self, send_button: List[int]) -> Optional[List[int]]:
         try:
             _send_x, send_y = get_center_point(send_button)
-            x = int(getattr(self.window_manager, "MSG_TOP_X", 0) or 0)
-            y = max(int(getattr(self.window_manager, "MSG_TOP_Y", 0) or 0), int(send_y) - 520)
-            width = int(getattr(self.window_manager, "MSG_WIDTH", 0) or 0)
-            height = max(80, int(send_y) - y - 40)
-            if width <= 0 or height <= 0:
+            chat_x = int(self.window_manager.MSG_TOP_X)
+            # The popup can extend left of the chat pane (including short names).
+            x = max(0, chat_x - 240)
+            top = int(self.window_manager.MSG_TOP_Y)
+            width = int(self.window_manager.MSG_WIDTH) + chat_x - x
+            # MSG_HEIGHT ends at the editor's top, regardless of editor height.
+            bottom = top + int(self.window_manager.MSG_HEIGHT)
+            if width <= 0 or not top < bottom < send_y:
                 return None
-            return [x, y, width, height]
-        except Exception:
+            y = max(top, bottom - 520)
+            return [x, y, width, bottom - y]
+        except (AttributeError, TypeError, ValueError):
             return None
 
     def _mention_candidates(
         self,
         mention_name: str,
         results: List[Dict],
-        region_width: int | None = None,
-        region_height: int | None = None,
+        region_width: int,
+        region_height: int,
     ) -> List[Dict]:
-        needle = mention_name.lower().replace(" ", "")
         candidates = []
         for result in results or []:
-            label = str(result.get("label") or "")
-            compact = label.lower().replace(" ", "")
-            if not compact:
+            if str(result.get("label") or "").strip() != mention_name:
                 continue
-            if compact.startswith("@"):
+            bbox = result.get("pixel_bbox")
+            if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
                 continue
-            normalized = compact
-            similarity = ratio(needle, normalized, score_cutoff=0.6)
-            if needle not in normalized and normalized not in needle and similarity < 0.6:
+            try:
+                x1, y1, x2, y2 = map(float, bbox)
+            except (TypeError, ValueError):
                 continue
-            bbox = result.get("pixel_bbox", [0, 0, 0, 0])
-            x_center = (float(bbox[0]) + float(bbox[2])) / 2 if len(bbox) >= 4 else 0
-            y_center = (float(bbox[1]) + float(bbox[3])) / 2 if len(bbox) >= 4 else 0
-            if region_width and x_center > float(region_width) * 0.65:
+            if not (0 <= x1 < x2 <= region_width and 0 <= y1 < y2 <= region_height):
                 continue
-            if region_height and y_center < float(region_height) * 0.45:
-                continue
-            exact_bonus = 1.0 if normalized == needle else 0.0
-            left_bonus = 0.1 if region_width and x_center < float(region_width) * 0.35 else 0
-            lower_bonus = (y_center / float(region_height)) * 0.25 if region_height else 0
-            item = dict(result)
-            item["similarity"] = float(similarity)
-            item["mention_score"] = float(similarity) + exact_bonus + left_bonus + lower_bonus
-            candidates.append(item)
-        candidates.sort(
-            key=lambda item: (
-                item.get("mention_score", 0),
-                float(item.get("pixel_bbox", [0, 0, 0, 0])[1]),
-            ),
-            reverse=True,
-        )
+            candidates.append(result)
         return candidates
 
     def clear_input_box(self) -> bool:
@@ -336,7 +322,8 @@ class MessageSender:
         Returns:
             bool: 是否成功。
         """
-        self.window_manager.activate_input_box()
+        if not self.window_manager.activate_input_box():
+            return False
         pyautogui.hotkey("ctrl", "a")
         time.sleep(0.3)
         pyautogui.press("backspace")

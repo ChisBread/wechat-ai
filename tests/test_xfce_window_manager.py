@@ -56,6 +56,26 @@ class DummyOCRProcessor:
 
 
 class XFCEWindowManagerTest(unittest.TestCase):
+    def test_editor_focus_stays_above_toolbar_after_layout_shift(self):
+        for left in (301, 321):
+            manager = XFCEWindowManager(image_processor=object(), ocr_processor=object())
+            manager.MSG_TOP_X, manager.MSG_TOP_Y = left, 80
+            manager.MSG_WIDTH, manager.MSG_HEIGHT = 1008-left, 1599
+            manager.ICON_CONFIGS["send_button"]["position"] = [892, 1770, 990, 1806]
+            with (
+                patch("wechat_ai_bot.rpa.xfce_window_manager._run", return_value=DummyCompletedProcess()) as run,
+                patch("wechat_ai_bot.rpa.xfce_window_manager.time.sleep"),
+            ):
+                self.assertTrue(manager.activate_input_box())
+            run.assert_called_once_with("xdotool", "mousemove", str(left+80), "1724", "click", "1")
+
+    def test_missing_editor_geometry_fails_without_click(self):
+        manager = XFCEWindowManager(image_processor=object(), ocr_processor=object())
+        manager.ICON_CONFIGS["send_button"]["position"] = [892, 1770, 990, 1806]
+        with patch("wechat_ai_bot.rpa.xfce_window_manager._run") as run:
+            self.assertFalse(manager.activate_input_box())
+        run.assert_not_called()
+
     def test_main_window_excludes_larger_browser_with_same_title(self):
         manager = XFCEWindowManager(image_processor=object(), ocr_processor=object())
 

@@ -12,6 +12,7 @@ import mss
 import numpy as np
 import wechat_ai_bot.utils.mouse as pyautogui
 from fuzzywuzzy import fuzz, process
+from wechat_ai_bot.rpa.editor import enabled_send_button
 from wechat_ai_bot.utils.helpers import get_center_point
 from wechat_ai_bot.utils.mouse import human_like_mouse_move
 
@@ -398,7 +399,7 @@ class UIInteractionHelper:
         Returns:
             bool: 是否已点击；不代表消息已发送，外发消息需由 RPAController 核验。
         """
-        send_button = self.controller.window_manager.get_icon_position("send_button")
+        send_button = enabled_send_button(self.controller.window_manager)
         if send_button:
             center = get_center_point(send_button)
             pyautogui.click(center[0], center[1])
