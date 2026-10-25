@@ -23,6 +23,7 @@ from urllib.parse import quote
 from PIL import Image, ImageDraw
 
 from wechat_ai_bot.common.queues import get_queue_stats
+from wechat_ai_bot.mcp.message_visibility import get_display_messages, row_transcript
 from wechat_ai_bot.services.core.linux_database_discovery import LinuxDatabaseDiscovery
 from wechat_ai_bot.services.core.wechat_dat import (
     WeChatDatError,
@@ -239,7 +240,7 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
             offset = 0
         limit = max(1, min(limit, 200))
         offset = max(0, offset)
-        chats = _recent_chat_payloads(database_service, limit=limit, offset=offset)
+        chats = _recent_chat_payloads(database_service, limit=limit, offset=offset, bot=bot)
         return JSONResponse(
             {
                 "ok": True,
@@ -346,7 +347,7 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         limit = max(1, min(limit, 300))
         parse_media = str(request.query_params.get("parse_media", "true")).lower() != "false"
         try:
-            rows = database_service.get_messages_by_username(contact.username, count=limit)
+            rows = get_display_messages(database_service, contact.username, count=limit, bot=bot)
             rows.reverse()
             messages = [
                 _rich_message_payload(database_service, getattr(bot, "message_factory_service", None), contact, row, parse_media=parse_media)
@@ -386,7 +387,7 @@ def _register_dashboard_api_routes(mcp: Any, bot: Any, config: Any, prefix: str)
         limit = max(1, min(limit, 50))
         factory_service = getattr(bot, "message_factory_service", None)
         try:
-            raw_rows = database_service.get_messages_by_username(contact.username, count=limit)
+            raw_rows = get_display_messages(database_service, contact.username, count=limit, bot=bot)
             messages = [
                 _factory_message_payload(database_service, factory_service, table_name, row)
                 for table_name, row in _rows_with_table(database_service, contact.username, raw_rows)
@@ -994,12 +995,12 @@ def _text_message_payload(database_service: Any, row: tuple, *, chat_username: s
     }
 
 
-def _recent_chat_payloads(database_service: Any, *, limit: int, offset: int = 0) -> list[dict[str, Any]]:
+def _recent_chat_payloads(database_service: Any, *, limit: int, offset: int = 0, bot: Any = None) -> list[dict[str, Any]]:
     username_map = getattr(database_service, "_message_username_map", {}) or {}
     chats: list[dict[str, Any]] = []
     for username in username_map.keys():
         try:
-            rows = database_service.get_messages_by_username(username, count=1)
+            rows = get_display_messages(database_service, username, count=1, bot=bot)
         except Exception:
             continue
         if not rows:
@@ -1082,12 +1083,19 @@ def _rich_message_payload(
             sender_username=sender_payload.get("username", ""),
         )
         return payload
+    if local_type == 34:
+        transcript = row_transcript(row)
+        payload["voice_to_text"] = transcript
+        payload["text"] = f"【语音】{transcript}"
     if not parse_media:
-        payload["text"] = f"[{payload['type_name']}]"
+        payload.setdefault("text", f"[{payload['type_name']}]")
         return payload
     table_name = f"Msg_{hashlib.md5(str(getattr(contact, 'username', '') or '').encode()).hexdigest()}"
     media_payload = _factory_message_payload(database_service, factory_service, table_name, row)
     payload.update(media_payload)
+    if local_type == 34:
+        payload["voice_to_text"] = transcript
+        payload["text"] = f"【语音】{transcript}"
     if not payload.get("text"):
         payload["text"] = media_payload.get("raw_content") or media_payload.get("factory_error") or f"[{payload['type_name']}]"
     _add_media_urls(payload)

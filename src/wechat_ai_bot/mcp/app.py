@@ -31,6 +31,7 @@ from wechat_ai_bot.mcp.dispatchers import (
     UnavailableCommandDispatcher,
 )
 from wechat_ai_bot.mcp.image_upload import decode_image_upload
+from wechat_ai_bot.mcp.message_visibility import get_display_messages
 from wechat_ai_bot.mcp.protocols import CommandDispatcher
 from wechat_ai_bot.models import UserInfo
 from wechat_ai_bot.rpa.rpa_action import RPAActionType
@@ -582,7 +583,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         return payload
 
     def _rows_for_contact(db: Any, contact: Any, limit: int, order: str = "desc") -> list[tuple]:
-        rows = db.get_messages_by_username(contact.username, count=limit, order=order)
+        rows = get_display_messages(db, contact.username, count=limit, order=order, bot=bot)
         if str(order).lower() != "asc":
             rows.reverse()
         return rows
@@ -969,7 +970,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
         chats: list[dict[str, Any]] = []
         for username in username_map.keys():
             try:
-                rows = db.get_messages_by_username(username, count=1)
+                rows = get_display_messages(db, username, count=1, bot=bot)
             except Exception:
                 continue
             if not rows:
@@ -1156,7 +1157,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 }
             )
         bounded_limit = max(1, min(int(limit or 40), 120))
-        rows = db.get_messages_by_username(contact.username, count=bounded_limit)
+        rows = get_display_messages(db, contact.username, count=bounded_limit, bot=bot)
         rows.reverse()
         messages = [_message_payload(db, row, include_text=True, chat_username=contact.username if contact else "") for row in rows]
         return _json(
