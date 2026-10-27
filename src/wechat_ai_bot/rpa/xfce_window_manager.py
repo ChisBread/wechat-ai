@@ -483,6 +483,29 @@ class XFCEWindowManager:
         self.last_switch_session_time = None
         self.current_session_name = ""
 
+    def _invalidate_layout(self) -> None:
+        self.current_window = None
+        self.weixin_windows.pop("WeChat", None)
+        self.MSG_TOP_X = self.MSG_TOP_Y = self.MSG_WIDTH = self.MSG_HEIGHT = 0
+        self.SIDE_BAR_WIDTH = self.SESSION_LIST_WIDTH = self.TITLE_BAR_HEIGHT = 0
+        self.ICON_CONFIGS["send_button"]["position"] = None
+        self.window_aligned = False
+        self.last_window_state = "layout_unavailable"
+        self._clear_session_cache()
+
+    def _input_height_is_valid(self, height: int, input_top: int) -> bool:
+        layout_config = self.rpa_config.get("layout", {})
+        minimum = int(layout_config.get("min_input_height", 100))
+        maximum = int(layout_config.get("max_input_height", 200))
+        input_height = height - input_top
+        if not 0 < minimum <= input_height <= maximum < height:
+            self.logger.warning(
+                "Invalid WeChat input height: %s (expected %s..%s), input_top=%s",
+                input_height, minimum, maximum, input_top,
+            )
+            return False
+        return True
+
     def _set_current_layout(self, w: int, h: int) -> None:
         self.weixin_windows["WeChat"] = {
             "MSG_TOP_X": self.MSG_TOP_X,
@@ -594,7 +617,9 @@ class XFCEWindowManager:
                 return False
 
             geom = self._window_geometry(wid)
-            needs_relayout = not self.current_window
+            needs_relayout = not self.current_window or not self._input_height_is_valid(
+                h, self.MSG_TOP_Y + self.MSG_HEIGHT,
+            )
             if not self._geometry_matches_target(geom, w, h):
                 self.logger.warning(
                     "WeChat window drifted before RPA action: got %s, target=%sx%s",
@@ -609,6 +634,8 @@ class XFCEWindowManager:
                 _run("xdotool", "windowraise", wid)
                 _run("xdotool", "windowactivate", wid)
 
+            if needs_relayout:
+                self._invalidate_layout()
             time.sleep(self.window_show_delay)
             self.actual_window_geometry = geom or {}
             self.window_id = wid
@@ -673,7 +700,7 @@ class XFCEWindowManager:
         y_max: int,
         x_min: int,
         x_max: int,
-    ) -> int:
+    ) -> Optional[int]:
         pixels = screenshot.load()
         width, height = screenshot.size
         x_min = max(1, min(x_min, width - 2))
@@ -694,7 +721,9 @@ class XFCEWindowManager:
             if score > best_score:
                 best_score = score
                 best_y = y
-        return best_y
+        # A flat or nearly flat frame has no usable boundary. Returning y_min
+        # here turns a partially rendered window into a plausible cached layout.
+        return best_y if best_score >= 6 else None
 
     def _find_full_width_horizontal_boundary(
         self,
@@ -809,6 +838,8 @@ class XFCEWindowManager:
             self.logger.error(f"init error: {e}"); return False
 
     def _init_window_part_size(self) -> bool:
+        # Never leave a previous layout usable after a failed reinitialization.
+        self._invalidate_layout()
         w, h = self.size_config.width, self.size_config.height
         self.logger.info(f"Initializing Linux WeChat layout from {w}x{h} screenshot...")
 
@@ -822,15 +853,11 @@ class XFCEWindowManager:
         if session_right <= sidebar + 180:
             session_right = min(w - 300, sidebar + 265)
 
-        self.SIDE_BAR_WIDTH = sidebar
-        self.SESSION_LIST_WIDTH = session_right - sidebar
-        self.MSG_TOP_X = session_right
-
         title_bottom = self._find_full_width_horizontal_boundary(
             screenshot,
             52,
             82,
-            self.MSG_TOP_X + 10,
+            session_right + 10,
             w - 10,
             diff_threshold=8,
             min_strong_ratio=0.45,
@@ -841,46 +868,55 @@ class XFCEWindowManager:
                 screenshot,
                 52,
                 82,
-                self.MSG_TOP_X + 10,
+                session_right + 10,
                 w - 10,
             )
-        if not 52 <= title_bottom <= 82:
-            title_bottom = 70
-        self.TITLE_BAR_HEIGHT = title_bottom
-        self.MSG_TOP_Y = title_bottom
+        if title_bottom is None or not 52 <= title_bottom <= 82:
+            self.logger.warning("WeChat title boundary is not ready")
+            return False
 
         input_top = self._find_full_width_horizontal_boundary(
             screenshot,
-            max(self.MSG_TOP_Y + 200, h - 360),
+            max(title_bottom + 200, h - 360),
             h - 80,
-            self.MSG_TOP_X + 10,
+            session_right + 10,
             w - 10,
         )
         if input_top is None:
             input_top = self._find_horizontal_boundary(
                 screenshot,
-                max(self.MSG_TOP_Y + 200, h - 360),
+                max(title_bottom + 200, h - 360),
                 h - 80,
-                self.MSG_TOP_X + 10,
+                session_right + 10,
                 w - 10,
             )
-        if input_top <= self.MSG_TOP_Y + 200:
-            input_top = h - 150
+        if input_top is None:
+            self.logger.warning("WeChat input boundary is not ready")
+            return False
+        if not self._input_height_is_valid(h, input_top):
+            return False
 
-        self.MSG_WIDTH = w - self.MSG_TOP_X
-        self.MSG_HEIGHT = input_top - self.MSG_TOP_Y
-        configured_room_sidebar_width = int(self.rpa_config.get("room_side_bar_width", 360))
-        self.ROOM_SIDE_BAR_WIDTH = max(260, min(configured_room_sidebar_width, w // 2))
-        if self.MSG_WIDTH < 300 or self.MSG_HEIGHT < 300:
+        msg_width = w - session_right
+        msg_height = input_top - title_bottom
+        if msg_width < 300 or msg_height < 300:
             self.logger.error(
                 "Invalid WeChat layout: msg region %sx%s at %s,%s",
-                self.MSG_WIDTH,
-                self.MSG_HEIGHT,
-                self.MSG_TOP_X,
-                self.MSG_TOP_Y,
+                msg_width,
+                msg_height,
+                session_right,
+                title_bottom,
             )
             return False
 
+        # Publish geometry only after every check succeeds.
+        self.SIDE_BAR_WIDTH = sidebar
+        self.SESSION_LIST_WIDTH = session_right - sidebar
+        self.MSG_TOP_X = session_right
+        self.TITLE_BAR_HEIGHT = self.MSG_TOP_Y = title_bottom
+        self.MSG_WIDTH = msg_width
+        self.MSG_HEIGHT = msg_height
+        configured_room_sidebar_width = int(self.rpa_config.get("room_side_bar_width", 360))
+        self.ROOM_SIDE_BAR_WIDTH = max(260, min(configured_room_sidebar_width, w // 2))
         send = [
             max(self.MSG_TOP_X + 80, w - 116),
             max(input_top + 20, h - 50),

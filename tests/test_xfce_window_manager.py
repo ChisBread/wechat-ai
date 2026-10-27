@@ -4,6 +4,8 @@ import unittest
 from importlib.util import find_spec
 from unittest.mock import Mock, patch
 
+from PIL import Image, ImageDraw
+
 
 def _module_exists(module_name):
     try:
@@ -53,6 +55,141 @@ class DummyOCRProcessor:
 
     def process_image(self, image):
         return [{"label": label, "pixel_bbox": [0, 0, 10, 10]} for label in self.labels]
+
+
+class LayoutReadinessTest(unittest.TestCase):
+    def setUp(self):
+        size = types.SimpleNamespace(width=1008, height=1820)
+        with patch("wechat_ai_bot.rpa.xfce_window_manager.suggest_size", return_value=size):
+            self.manager = XFCEWindowManager(Mock(), Mock())
+        self.manager._save_layout_debug = Mock()
+        self.manager.window_show_delay = self.manager.scroll_delay = 0
+
+    def frame(self, input_height=141, contrast=30, title=True, editor=True):
+        image = Image.new("RGB", (1008, 1820), (240, 240, 240))
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, 60, 1819), fill=(40, 40, 40))
+        draw.rectangle((61, 0, 300, 1819), fill=(220, 220, 220))
+        shade = (240 - contrast,) * 3
+        if title:
+            draw.rectangle((301, 0, 1007, 79), fill=shade)
+        if editor:
+            draw.rectangle((301, 1820 - input_height, 1007, 1819), fill=shade)
+        return image
+
+    def mock_window(self):
+        """Keep X11 interactions inert while exercising real layout/retry paths."""
+        geometry = {"x": 0, "y": 0, "width": 1008, "height": 1820}
+        patches = [
+            patch("wechat_ai_bot.rpa.xfce_window_manager.subprocess.run",
+                  return_value=DummyCompletedProcess("123")),
+            patch("wechat_ai_bot.rpa.xfce_window_manager._run",
+                  return_value=DummyCompletedProcess()),
+            patch("wechat_ai_bot.rpa.xfce_window_manager.time.sleep"),
+            patch.object(self.manager, "_find_wechat_window", return_value="123"),
+            patch.object(self.manager, "_enter_wechat_if_needed", return_value=True),
+            patch.object(self.manager, "_normalize_dpi"),
+            patch.object(self.manager, "_target_window_size", return_value=(1008, 1820)),
+            patch.object(self.manager, "_window_geometry", return_value=geometry),
+            patch.object(self.manager, "_resize_wechat_window", return_value=geometry),
+        ]
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def assert_unready(self):
+        self.assertIsNone(self.manager.current_window)
+        self.assertNotIn("WeChat", self.manager.weixin_windows)
+        self.assertIsNone(self.manager.get_icon_position("send_button"))
+        self.assertEqual(self.manager.MSG_HEIGHT, 0)
+        self.assertFalse(self.manager.window_aligned)
+        self.assertEqual(self.manager.last_window_state, "layout_unavailable")
+
+    def test_blank_and_nearly_flat_frames_have_no_boundary(self):
+        for contrast in (0, 1):
+            with self.subTest(contrast=contrast):
+                frame = Image.new("RGB", (1008, 1820), (240, 240, 240))
+                ImageDraw.Draw(frame).rectangle(
+                    (301, 1679, 1007, 1819), fill=(240 - contrast,) * 3,
+                )
+                self.assertIsNone(self.manager._find_horizontal_boundary(
+                    frame, 1460, 1740, 311, 998,
+                ))
+                self.manager.image_processor.take_screenshot.return_value = frame
+                self.assertFalse(self.manager._init_window_part_size())
+                self.assert_unready()
+
+    def test_partially_rendered_frames_are_not_cached(self):
+        for title, editor in ((True, False), (False, True)):
+            with self.subTest(title=title, editor=editor):
+                self.manager.image_processor.take_screenshot.return_value = self.frame(
+                    title=title, editor=editor,
+                )
+                self.assertFalse(self.manager._init_window_part_size())
+                self.assert_unready()
+
+    def test_input_height_limits_reject_reported_bad_layout(self):
+        for height in (81, 99, 100, 141, 200, 201, 360):
+            with self.subTest(height=height):
+                self.manager.image_processor.take_screenshot.return_value = self.frame(height)
+                self.assertEqual(self.manager._init_window_part_size(), 100 <= height <= 200)
+                if 100 <= height <= 200:
+                    self.assertEqual(self.manager.MSG_TOP_Y, 80)
+                    self.assertEqual(self.manager.MSG_HEIGHT, 1820 - height - 80)
+                else:
+                    self.assert_unready()
+
+    def test_custom_input_height_limits(self):
+        self.manager.rpa_config["layout"] = {"min_input_height": 220, "max_input_height": 300}
+        self.manager.image_processor.take_screenshot.return_value = self.frame(260)
+        self.assertTrue(self.manager._init_window_part_size())
+        self.assertEqual(self.manager.MSG_HEIGHT, 1480)
+
+    def test_visible_low_contrast_boundaries_still_work(self):
+        # This separator is below the full-width detector's contrast threshold.
+        self.manager.image_processor.take_screenshot.return_value = self.frame(contrast=3)
+        self.assertTrue(self.manager._init_window_part_size())
+        self.assertEqual(self.manager.MSG_TOP_Y + self.manager.MSG_HEIGHT, 1679)
+
+    def test_startup_retries_after_blank_frame(self):
+        self.mock_window()
+        self.manager.image_processor.take_screenshot.side_effect = [
+            Image.new("RGB", (1008, 1820), (240, 240, 240)), self.frame(),
+        ]
+        # The bot's existing initialization loop retries when this returns False.
+        self.assertFalse(self.manager.init_chat_window())
+        self.assert_unready()
+        self.assertTrue(self.manager.init_chat_window())
+        self.assertEqual(self.manager.current_window["MSG_HEIGHT"], 1599)
+        self.assertEqual(self.manager.last_window_state, "ready")
+
+    def test_failed_relayout_clears_previous_geometry_and_session(self):
+        self.mock_window()
+        self.manager.image_processor.take_screenshot.return_value = self.frame()
+        self.assertTrue(self.manager.init_chat_window())
+        self.manager.last_switch_session = self.manager.current_session_name = "old chat"
+        self.manager.image_processor.take_screenshot.return_value = None
+        self.assertFalse(self.manager.init_chat_window())
+        self.assert_unready()
+        self.assertIsNone(self.manager.last_switch_session)
+        self.assertEqual(self.manager.current_session_name, "")
+
+    def test_preflight_retries_invalid_cache_without_window_resize(self):
+        self.mock_window()
+        self.manager.MSG_TOP_X, self.manager.MSG_TOP_Y = 301, 52
+        self.manager.MSG_WIDTH, self.manager.MSG_HEIGHT = 707, 1408
+        self.manager._set_current_layout(1008, 1820)
+        self.manager.image_processor.take_screenshot.side_effect = [
+            Image.new("RGB", (1008, 1820), (240, 240, 240)), self.frame(),
+        ]
+        self.assertFalse(self.manager.ensure_action_ready())
+        self.assert_unready()
+        self.assertTrue(self.manager.ensure_action_ready())
+        self.assertEqual(self.manager.current_window["MSG_HEIGHT"], 1599)
+        self.manager._resize_wechat_window.assert_not_called()
+        # Once valid, unchanged geometry continues using the cached layout.
+        self.assertTrue(self.manager.ensure_action_ready())
+        self.assertEqual(self.manager.image_processor.take_screenshot.call_count, 2)
 
 
 class XFCEWindowManagerTest(unittest.TestCase):
