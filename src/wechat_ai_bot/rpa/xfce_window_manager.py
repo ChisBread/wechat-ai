@@ -4,6 +4,7 @@ import logging
 import re
 import subprocess
 import time
+from threading import RLock
 from pathlib import Path
 from typing import Any, Optional
 
@@ -60,6 +61,12 @@ class XFCEWindowManager:
         self.size_config = suggest_size(self.rpa_config)
         self.weixin_windows = {}
         self.current_window = None
+        # Shared with the controller for the entire visual action, including cleanup.
+        self.ui_lock = RLock()
+        self._startup_complete = False
+        self._startup_empty_frames = 0
+        self._startup_retry_at = 0.0
+        self._startup_pending_session = ""
         self.MSG_TOP_X = self.MSG_TOP_Y = self.MSG_WIDTH = self.MSG_HEIGHT = 0
         self.SIDE_BAR_WIDTH = self.SESSION_LIST_WIDTH = self.TITLE_BAR_HEIGHT = 0
         self.ROOM_SIDE_BAR_WIDTH = int(self.rpa_config.get("room_side_bar_width", 360))
@@ -507,6 +514,7 @@ class XFCEWindowManager:
         return True
 
     def _set_current_layout(self, w: int, h: int) -> None:
+        self._startup_complete = True
         self.weixin_windows["WeChat"] = {
             "MSG_TOP_X": self.MSG_TOP_X,
             "MSG_TOP_Y": self.MSG_TOP_Y,
@@ -592,6 +600,10 @@ class XFCEWindowManager:
 
     def ensure_action_ready(self, action: Any = None) -> bool:
         """Normalize WeChat state before any visual RPA action."""
+        with self.ui_lock:
+            return self._ensure_action_ready_locked(action)
+
+    def _ensure_action_ready_locked(self, action: Any = None) -> bool:
         action_name = getattr(getattr(action, "action_type", None), "name", "")
         self.logger.info("Ensuring WeChat window state before RPA action: %s", action_name or "unknown")
         try:
@@ -652,6 +664,11 @@ class XFCEWindowManager:
                     self.last_window_state = "layout_unavailable"
                     self.window_aligned = False
                     return False
+                pending = self._startup_pending_session
+                if pending and not self._startup_title_matches(pending):
+                    self._invalidate_layout()
+                    return False
+                self._startup_pending_session = ""
                 self._set_current_layout(w, h)
 
             self.last_window_state = "ready"
@@ -770,6 +787,10 @@ class XFCEWindowManager:
         return best_y
 
     def init_chat_window(self) -> bool:
+        with self.ui_lock:
+            return self._init_chat_window_locked()
+
+    def _init_chat_window_locked(self) -> bool:
         self.logger.info("Initializing chat window (Openbox/X11)...")
         try:
             if not subprocess.run(["pgrep", "-x", "wechat"], capture_output=True).stdout.strip():
@@ -829,13 +850,148 @@ class XFCEWindowManager:
                 self.logger.warning("Using target geometry without window manager confirmation")
 
             time.sleep(self.scroll_delay)
-            if self._init_window_part_size():
+            if self._init_startup_layout():
                 self._set_current_layout(w, h)
                 self.last_window_state = "ready"
                 return True
             return False
         except Exception as e:
             self.logger.error(f"init error: {e}"); return False
+
+    @staticmethod
+    def _startup_label(text: str) -> str:
+        return "".join(str(text).split()).casefold()
+
+    def _empty_startup_pane(self, screenshot) -> Optional[int]:
+        """Recognize the light-theme welcome pane, not just a missing editor.
+
+        Require a populated session list and the centered grey watermark on an
+        otherwise uniform pane. Login screens, blank frames and overlays fail.
+        Unknown themes/scales remain unready rather than triggering navigation.
+        """
+        w, h = screenshot.size
+        if w < 600 or h < 500:
+            return None
+        left = self._find_vertical_boundary(screenshot, 260, 380, 40, h - 40)
+        pixels = screenshot.load()
+        background = pixels[w - 20, 120][:3]
+        if min(background) < 230 or max(background) - min(background) > 8:
+            return None
+        cx, cy = (left + w) // 2, (32 + h) // 2
+        marker = outside = changed = 0
+        for y in range(40, h - 8, 8):
+            for x in range(left + 8, w - 8, 8):
+                rgb = pixels[x, y][:3]
+                diff = max(abs(int(rgb[i]) - int(background[i])) for i in range(3))
+                if abs(x - cx) <= 65 and abs(y - cy) <= 55:
+                    marker += diff >= 12 and max(rgb) - min(rgb) < 8
+                else:
+                    outside += 1
+                    changed += diff > 8
+        if not 15 <= marker <= 150 or not outside or changed / outside > 0.002:
+            return None
+        rows = self.ocr_processor.process_image(image=screenshot.crop((65, 35, left, min(h, 650))))
+        search_visible = any(
+            self._startup_label(row.get("label", "")) in {"搜索", "search"}
+            and row.get("pixel_bbox", [0, 999])[1] < 40 for row in rows
+        )
+        session_visible = any(
+            row.get("label", "").strip() and row.get("pixel_bbox", [0, 0])[1] > 50
+            for row in rows
+        )
+        return left if search_visible and session_visible else None
+
+    def _startup_title_matches(self, target: str) -> bool:
+        left = self.MSG_TOP_X
+        shot = self.image_processor.take_screenshot(
+            region=[left + 10, 35, self.size_config.width - left - 20, 45],
+        )
+        if shot is None:
+            return False
+        rows = self.ocr_processor.process_image(image=shot)
+        return any(self._startup_label(row.get("label", "")) == self._startup_label(target)
+                   for row in rows)
+
+    def _open_startup_session(self, target: str) -> bool:
+        """Click an exact match in the first local result, never press Enter."""
+        active = self._active_window()
+        if not active or active.id != self.window_id:
+            return False
+        search_started = selected = False
+        try:
+            if _run("xdotool", "key", "ctrl+f").returncode:
+                return False
+            search_started = True
+            time.sleep(self.action_delay)
+            if not set_clipboard_text(target):
+                return False
+            if _run("xdotool", "key", "ctrl+a").returncode:
+                return False
+            if _run("xdotool", "key", "ctrl+v").returncode:
+                return False
+            time.sleep(max(self.switch_contact_delay, 0.5))
+            # Exclude the search field and web suggestions below the local result.
+            region = [72, 85, 330, 90]
+            shot = self.image_processor.take_screenshot(region=region)
+            if shot is None:
+                return False
+            matches = [row for row in self.ocr_processor.process_image(image=shot)
+                       if self._startup_label(row.get("label", "")) == self._startup_label(target)]
+            if len(matches) != 1:
+                self.logger.warning("Startup session search has no unique exact local match")
+                return False
+            x1, y1, x2, y2 = matches[0]["pixel_bbox"]
+            if not (0 <= x1 < x2 <= region[2] and 0 <= y1 < y2 <= region[3]):
+                return False
+            result = _run("xdotool", "mousemove", str(int(region[0] + (x1 + x2) / 2)),
+                          str(int(region[1] + (y1 + y2) / 2)), "click", "1")
+            if result.returncode:
+                return False
+            selected = True
+            self._startup_pending_session = target
+            self.logger.info("Opened startup session candidate; waiting for title and layout verification")
+            return True
+        finally:
+            # Once a result opens, Escape hides the main WeChat window.
+            if search_started and not selected:
+                _run("xdotool", "key", "Escape")
+
+    def _init_startup_layout(self) -> bool:
+        valid = self._init_window_part_size()
+        if valid:
+            pending = self._startup_pending_session
+            if pending and not self._startup_title_matches(pending):
+                self.logger.warning("Startup session title is not confirmed yet")
+                self._invalidate_layout()
+                return False
+            self._startup_pending_session = ""
+            self._startup_empty_frames = 0
+            return True
+        target = str(self.rpa_config.get("layout", {}).get("startup_session", "文件传输助手") or "").strip()
+        if self._startup_complete or not target or any(c in target for c in "\r\n\t"):
+            return False
+        if time.monotonic() < self._startup_retry_at:
+            return False
+        shot = self.image_processor.take_screenshot(
+            region=[0, 0, self.size_config.width, self.size_config.height],
+        )
+        if shot is None or self._empty_startup_pane(shot) is None:
+            self._startup_empty_frames = 0
+            return False
+        self._startup_empty_frames += 1
+        if self._startup_empty_frames < 2:
+            return False
+        self._startup_empty_frames = 0
+        self._startup_retry_at = time.monotonic() + 15
+        if not self._open_startup_session(target):
+            return False
+        time.sleep(max(self.window_show_delay, 0.5))
+        # Search keystrokes/clicks are not proof that a chat was opened.
+        if self._init_window_part_size() and self._startup_title_matches(target):
+            self._startup_pending_session = ""
+            return True
+        self._invalidate_layout()
+        return False
 
     def _init_window_part_size(self) -> bool:
         # Never leave a previous layout usable after a failed reinitialization.

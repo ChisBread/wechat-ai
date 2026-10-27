@@ -69,6 +69,10 @@ rpa:
   layout:
     min_input_height: 100
     max_input_height: 200
+    # Open this exact local search result only on the empty welcome pane at startup.
+    # Use the displayed name for your client language; empty string disables this.
+    # The title and layout must both be verified. No message is sent.
+    startup_session: "文件传输助手"
   side_bar_delay: 3
   ocr:
     min_confidence: 0.5
