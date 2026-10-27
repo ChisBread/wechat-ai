@@ -7,6 +7,7 @@ Adapted from omni-bot-sdk for Linux (X11) platform.
 import logging
 import random
 import time
+from contextlib import nullcontext
 from typing import Any, Dict, Optional
 from threading import Lock
 
@@ -143,6 +144,11 @@ class RPAController:
 
     def execute_action(self, action: RPAAction) -> bool:
         """Execute an RPA action, dispatching to the appropriate handler."""
+        # Keep startup navigation out of preflight, handler actions and cleanup.
+        with getattr(self.window_manager, "ui_lock", nullcontext()):
+            return self._execute_action_locked(action)
+
+    def _execute_action_locked(self, action: RPAAction) -> bool:
         requires_verification = action.action_type in SEND_ACTIONS
         action.execution_result = {}
         if requires_verification:

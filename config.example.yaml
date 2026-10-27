@@ -63,6 +63,16 @@ rpa:
     min_height: 812
     max_height: 2000
     align_factor: 28
+  # Physical pixels from the detected input separator to the window bottom,
+  # including the toolbar. Adjust if using a custom editor height/scale.
+  # Invalid layouts stay unready and are retried by the bot initialization loop.
+  layout:
+    min_input_height: 100
+    max_input_height: 200
+    # Open this exact local search result only on the empty welcome pane at startup.
+    # Use the displayed name for your client language; empty string disables this.
+    # The title and layout must both be verified. No message is sent.
+    startup_session: "文件传输助手"
   side_bar_delay: 3
   ocr:
     min_confidence: 0.5

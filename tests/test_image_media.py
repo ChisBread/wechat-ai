@@ -201,3 +201,28 @@ def test_valid_runtime_key_is_persisted_and_invalid_key_is_not(tmp_path):
     db.user_info.dat_key = '0123456789abcdef'
     add_media_base64(db, {'path': 'a.dat'})
     assert Config(str(config_path)).get('aes_xor_key') == '0123456789abcdef,60'
+
+
+@pytest.mark.parametrize('tier', ['standard', 'original'])
+def test_dat_trailer_does_not_force_thumbnail_fallback(tmp_path, tier):
+    import base64
+    output = io.BytesIO()
+    Image.new('RGB', (796, 776), 'blue').save(output, format='JPEG')
+    image = output.getvalue()
+    trailer = b'TAG!' + b'\0' * 4 + bytes(range(16))
+    path = tmp_path / ('a_h.dat' if tier == 'original' else 'a.dat')
+    path.write_bytes(make_dat(plain=image + trailer, aes_size=32))
+    (tmp_path / 'a_t.dat').write_bytes(png((150, 146)))
+    user = UserInfo(dat_key='0123456789abcdef', dat_xor_key=60)
+    payload = {'path': 'a.dat', 'thumb_path': 'a_t.dat'}
+    with patch('wechat_ai_bot.mcp.debug.derive_dat_key_for_file') as discover:
+        add_media_base64(db_at(tmp_path, user), payload)
+        response = _dashboard_dat_media_response(path, user, headers={}, as_download=False)
+        discover.assert_not_called()
+    assert payload['media_tier'] == tier
+    assert payload['is_thumbnail'] is False
+    assert (payload['media_width'], payload['media_height']) == (796, 776)
+    assert payload['media_size_bytes'] == len(image)
+    assert payload.get('media_fallback_reason') != 'higher_resolution_unavailable'
+    assert 'media_fallback_errors' not in payload
+    assert base64.b64decode(payload['base64']) == response.body == image
