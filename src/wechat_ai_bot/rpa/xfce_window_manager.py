@@ -892,7 +892,8 @@ class XFCEWindowManager:
             return None
         rows = self.ocr_processor.process_image(image=screenshot.crop((65, 35, left, min(h, 650))))
         search_visible = any(
-            self._startup_label(row.get("label", "")) in {"搜索", "search"}
+            # OCR can join the magnifying-glass icon to the placeholder as Q.
+            self._startup_label(row.get("label", "")) in {"搜索", "search", "q搜索", "qsearch"}
             and row.get("pixel_bbox", [0, 999])[1] < 40 for row in rows
         )
         session_visible = any(

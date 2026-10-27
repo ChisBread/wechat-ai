@@ -220,6 +220,14 @@ class StartupSessionTest(WindowManagerFixture):
         self.manager.ocr_processor.process_image.return_value = []
         self.assertIsNone(self.manager._empty_startup_pane(self.welcome()))
 
+    def test_welcome_search_placeholder_tolerates_magnifier_ocr(self):
+        for label in ("Q搜索", "Q 搜索", "Q Search"):
+            with self.subTest(label=label):
+                self.manager.ocr_processor.process_image.return_value[0]["label"] = label
+                self.assertEqual(self.manager._empty_startup_pane(self.welcome()), 301)
+        self.manager.ocr_processor.process_image.return_value[0]["label"] = "Something else"
+        self.assertIsNone(self.manager._empty_startup_pane(self.welcome()))
+
     def test_startup_opens_only_after_two_empty_observations_and_verifies(self):
         self.mock_window()
         self.manager.image_processor.take_screenshot.return_value = self.welcome()
