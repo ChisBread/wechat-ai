@@ -4,6 +4,8 @@ import unittest
 from importlib.util import find_spec
 from unittest.mock import Mock, patch
 
+from PIL import Image, ImageDraw
+
 
 def _module_exists(module_name):
     try:
@@ -53,6 +55,330 @@ class DummyOCRProcessor:
 
     def process_image(self, image):
         return [{"label": label, "pixel_bbox": [0, 0, 10, 10]} for label in self.labels]
+
+
+class WindowManagerFixture(unittest.TestCase):
+    def setUp(self):
+        size = types.SimpleNamespace(width=1008, height=1820)
+        with patch("wechat_ai_bot.rpa.xfce_window_manager.suggest_size", return_value=size):
+            self.manager = XFCEWindowManager(Mock(), Mock())
+        self.manager.rpa_config["layout"] = {"startup_session": ""}
+        self.manager._save_layout_debug = Mock()
+        self.manager.window_show_delay = self.manager.scroll_delay = 0
+
+    def frame(self, input_height=141, contrast=30, title=True, editor=True):
+        image = Image.new("RGB", (1008, 1820), (240, 240, 240))
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, 60, 1819), fill=(40, 40, 40))
+        draw.rectangle((61, 0, 300, 1819), fill=(220, 220, 220))
+        shade = (240 - contrast,) * 3
+        if title:
+            draw.rectangle((301, 0, 1007, 79), fill=shade)
+        if editor:
+            draw.rectangle((301, 1820 - input_height, 1007, 1819), fill=shade)
+        return image
+
+    def mock_window(self):
+        """Keep X11 interactions inert while exercising real layout/retry paths."""
+        geometry = {"x": 0, "y": 0, "width": 1008, "height": 1820}
+        patches = [
+            patch("wechat_ai_bot.rpa.xfce_window_manager.subprocess.run",
+                  return_value=DummyCompletedProcess("123")),
+            patch("wechat_ai_bot.rpa.xfce_window_manager._run",
+                  return_value=DummyCompletedProcess()),
+            patch("wechat_ai_bot.rpa.xfce_window_manager.time.sleep"),
+            patch.object(self.manager, "_find_wechat_window", return_value="123"),
+            patch.object(self.manager, "_enter_wechat_if_needed", return_value=True),
+            patch.object(self.manager, "_normalize_dpi"),
+            patch.object(self.manager, "_target_window_size", return_value=(1008, 1820)),
+            patch.object(self.manager, "_window_geometry", return_value=geometry),
+            patch.object(self.manager, "_resize_wechat_window", return_value=geometry),
+        ]
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def assert_unready(self):
+        self.assertIsNone(self.manager.current_window)
+        self.assertNotIn("WeChat", self.manager.weixin_windows)
+        self.assertIsNone(self.manager.get_icon_position("send_button"))
+        self.assertEqual(self.manager.MSG_HEIGHT, 0)
+        self.assertFalse(self.manager.window_aligned)
+        self.assertEqual(self.manager.last_window_state, "layout_unavailable")
+
+class LayoutReadinessTest(WindowManagerFixture):
+    def test_blank_and_nearly_flat_frames_have_no_boundary(self):
+        for contrast in (0, 1):
+            with self.subTest(contrast=contrast):
+                frame = Image.new("RGB", (1008, 1820), (240, 240, 240))
+                ImageDraw.Draw(frame).rectangle(
+                    (301, 1679, 1007, 1819), fill=(240 - contrast,) * 3,
+                )
+                self.assertIsNone(self.manager._find_horizontal_boundary(
+                    frame, 1460, 1740, 311, 998,
+                ))
+                self.manager.image_processor.take_screenshot.return_value = frame
+                self.assertFalse(self.manager._init_window_part_size())
+                self.assert_unready()
+
+    def test_partially_rendered_frames_are_not_cached(self):
+        for title, editor in ((True, False), (False, True)):
+            with self.subTest(title=title, editor=editor):
+                self.manager.image_processor.take_screenshot.return_value = self.frame(
+                    title=title, editor=editor,
+                )
+                self.assertFalse(self.manager._init_window_part_size())
+                self.assert_unready()
+
+    def test_input_height_limits_reject_reported_bad_layout(self):
+        for height in (81, 99, 100, 141, 200, 201, 360):
+            with self.subTest(height=height):
+                self.manager.image_processor.take_screenshot.return_value = self.frame(height)
+                self.assertEqual(self.manager._init_window_part_size(), 100 <= height <= 200)
+                if 100 <= height <= 200:
+                    self.assertEqual(self.manager.MSG_TOP_Y, 80)
+                    self.assertEqual(self.manager.MSG_HEIGHT, 1820 - height - 80)
+                else:
+                    self.assert_unready()
+
+    def test_custom_input_height_limits(self):
+        self.manager.rpa_config["layout"] = {"min_input_height": 220, "max_input_height": 300}
+        self.manager.image_processor.take_screenshot.return_value = self.frame(260)
+        self.assertTrue(self.manager._init_window_part_size())
+        self.assertEqual(self.manager.MSG_HEIGHT, 1480)
+
+    def test_visible_low_contrast_boundaries_still_work(self):
+        # This separator is below the full-width detector's contrast threshold.
+        self.manager.image_processor.take_screenshot.return_value = self.frame(contrast=3)
+        self.assertTrue(self.manager._init_window_part_size())
+        self.assertEqual(self.manager.MSG_TOP_Y + self.manager.MSG_HEIGHT, 1679)
+
+    def test_startup_retries_after_blank_frame(self):
+        self.mock_window()
+        self.manager.image_processor.take_screenshot.side_effect = [
+            Image.new("RGB", (1008, 1820), (240, 240, 240)), self.frame(),
+        ]
+        # The bot's existing initialization loop retries when this returns False.
+        self.assertFalse(self.manager.init_chat_window())
+        self.assert_unready()
+        self.assertTrue(self.manager.init_chat_window())
+        self.assertEqual(self.manager.current_window["MSG_HEIGHT"], 1599)
+        self.assertEqual(self.manager.last_window_state, "ready")
+
+    def test_failed_relayout_clears_previous_geometry_and_session(self):
+        self.mock_window()
+        self.manager.image_processor.take_screenshot.return_value = self.frame()
+        self.assertTrue(self.manager.init_chat_window())
+        self.manager.last_switch_session = self.manager.current_session_name = "old chat"
+        self.manager.image_processor.take_screenshot.return_value = None
+        self.assertFalse(self.manager.init_chat_window())
+        self.assert_unready()
+        self.assertIsNone(self.manager.last_switch_session)
+        self.assertEqual(self.manager.current_session_name, "")
+
+    def test_preflight_retries_invalid_cache_without_window_resize(self):
+        self.mock_window()
+        self.manager.MSG_TOP_X, self.manager.MSG_TOP_Y = 301, 52
+        self.manager.MSG_WIDTH, self.manager.MSG_HEIGHT = 707, 1408
+        self.manager._set_current_layout(1008, 1820)
+        self.manager.image_processor.take_screenshot.side_effect = [
+            Image.new("RGB", (1008, 1820), (240, 240, 240)), self.frame(),
+        ]
+        self.assertFalse(self.manager.ensure_action_ready())
+        self.assert_unready()
+        self.assertTrue(self.manager.ensure_action_ready())
+        self.assertEqual(self.manager.current_window["MSG_HEIGHT"], 1599)
+        self.manager._resize_wechat_window.assert_not_called()
+        # Once valid, unchanged geometry continues using the cached layout.
+        self.assertTrue(self.manager.ensure_action_ready())
+        self.assertEqual(self.manager.image_processor.take_screenshot.call_count, 2)
+
+
+class StartupSessionTest(WindowManagerFixture):
+    def setUp(self):
+        super().setUp()
+        self.manager.rpa_config["layout"]["startup_session"] = "文件传输助手"
+        self.manager.ocr_processor.process_image.return_value = [
+            {"label": "搜索", "pixel_bbox": [10, 10, 50, 30]},
+            {"label": "文件传输助手", "pixel_bbox": [45, 100, 150, 120]},
+        ]
+
+    def welcome(self):
+        image = self.frame(title=False, editor=False)
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((620, 900, 665, 942), fill=(210, 210, 210))
+        draw.ellipse((645, 920, 690, 958), fill=(210, 210, 210))
+        return image
+
+    def test_welcome_requires_watermark_and_populated_session_list(self):
+        self.assertEqual(self.manager._empty_startup_pane(self.welcome()), 301)
+        self.assertIsNone(self.manager._empty_startup_pane(self.frame(title=False, editor=False)))
+        self.assertIsNone(self.manager._empty_startup_pane(self.frame()))
+        popup = self.welcome()
+        ImageDraw.Draw(popup).rectangle((500, 700, 800, 1100), fill=(150, 150, 150))
+        self.assertIsNone(self.manager._empty_startup_pane(popup))
+        self.manager.ocr_processor.process_image.return_value = []
+        self.assertIsNone(self.manager._empty_startup_pane(self.welcome()))
+
+    def test_welcome_search_placeholder_tolerates_magnifier_ocr(self):
+        for label in ("Q搜索", "Q 搜索", "Q Search"):
+            with self.subTest(label=label):
+                self.manager.ocr_processor.process_image.return_value[0]["label"] = label
+                self.assertEqual(self.manager._empty_startup_pane(self.welcome()), 301)
+        self.manager.ocr_processor.process_image.return_value[0]["label"] = "Something else"
+        self.assertIsNone(self.manager._empty_startup_pane(self.welcome()))
+
+    def test_startup_opens_only_after_two_empty_observations_and_verifies(self):
+        self.mock_window()
+        self.manager.image_processor.take_screenshot.return_value = self.welcome()
+        with (
+            patch.object(self.manager, "_init_window_part_size", side_effect=[False, False, True]),
+            patch.object(self.manager, "_open_startup_session", return_value=True) as open_session,
+            patch.object(self.manager, "_startup_title_matches", return_value=True) as title,
+        ):
+            self.assertFalse(self.manager.init_chat_window())
+            open_session.assert_not_called()
+            self.assertTrue(self.manager.init_chat_window())
+            open_session.assert_called_once_with("文件传输助手")
+            title.assert_called_once_with("文件传输助手")
+            self.assertTrue(self.manager._startup_complete)
+            self.assertEqual(self.manager.last_window_state, "ready")
+
+    def test_existing_valid_chat_does_not_trigger_navigation(self):
+        self.mock_window()
+        self.manager.image_processor.take_screenshot.return_value = self.frame()
+        with patch.object(self.manager, "_open_startup_session") as open_session:
+            self.assertTrue(self.manager.init_chat_window())
+            open_session.assert_not_called()
+            self.manager.ocr_processor.process_image.assert_not_called()
+
+    def test_disabled_or_finished_startup_never_opens_session(self):
+        for disabled in (False, True):
+            with self.subTest(disabled=disabled):
+                self.manager._startup_complete = not disabled
+                self.manager.rpa_config["layout"]["startup_session"] = "" if disabled else "文件传输助手"
+                with (
+                    patch.object(self.manager, "_init_window_part_size", return_value=False),
+                    patch.object(self.manager, "_open_startup_session") as open_session,
+                ):
+                    self.assertFalse(self.manager._init_startup_layout())
+                    open_session.assert_not_called()
+        self.manager.image_processor.take_screenshot.assert_not_called()
+
+    def test_failed_search_backs_off_and_partial_frame_resets_confirmation(self):
+        now = [100.0]
+        self.manager.image_processor.take_screenshot.return_value = self.welcome()
+        with (
+            patch.object(self.manager, "_init_window_part_size", return_value=False),
+            patch.object(self.manager, "_open_startup_session", return_value=False) as open_session,
+            patch("wechat_ai_bot.rpa.xfce_window_manager.time.monotonic", side_effect=lambda: now[0]),
+        ):
+            self.assertFalse(self.manager._init_startup_layout())
+            self.manager.image_processor.take_screenshot.return_value = self.frame(title=False, editor=False)
+            self.assertFalse(self.manager._init_startup_layout())
+            self.manager.image_processor.take_screenshot.return_value = self.welcome()
+            self.assertFalse(self.manager._init_startup_layout())
+            open_session.assert_not_called()
+            self.assertFalse(self.manager._init_startup_layout())
+            self.assertEqual(open_session.call_count, 1)
+            for _ in range(3):
+                self.assertFalse(self.manager._init_startup_layout())
+            self.assertEqual(open_session.call_count, 1)
+            now[0] += 16
+            self.assertFalse(self.manager._init_startup_layout())
+            self.assertFalse(self.manager._init_startup_layout())
+            self.assertEqual(open_session.call_count, 2)
+
+    def test_pending_title_must_match_before_ready(self):
+        self.mock_window()
+        self.manager._startup_pending_session = "文件传输助手"
+        self.manager.image_processor.take_screenshot.return_value = self.frame()
+        self.manager.ocr_processor.process_image.return_value = [
+            {"label": "Someone else", "pixel_bbox": [10, 10, 150, 30]},
+        ]
+        with patch.object(self.manager, "_open_startup_session") as open_session:
+            self.assertFalse(self.manager.init_chat_window())
+            self.assert_unready()
+            self.manager.ocr_processor.process_image.return_value[0]["label"] = "文件传输助手"
+            self.assertTrue(self.manager.init_chat_window())
+            self.assertEqual(self.manager.MSG_HEIGHT, 1599)
+            open_session.assert_not_called()
+
+    def test_preflight_cannot_bypass_pending_title_verification(self):
+        self.mock_window()
+        self.manager._startup_pending_session = "文件传输助手"
+        self.manager.image_processor.take_screenshot.return_value = self.frame()
+        self.manager.ocr_processor.process_image.return_value = []
+        self.assertFalse(self.manager.ensure_action_ready())
+        self.assert_unready()
+        self.manager.ocr_processor.process_image.return_value = [
+            {"label": "文件传输助手", "pixel_bbox": [10, 10, 150, 30]},
+        ]
+        self.assertTrue(self.manager.ensure_action_ready())
+        self.assertTrue(self.manager._startup_complete)
+
+    def test_opened_session_waits_for_rendering_without_repeated_search(self):
+        self.manager._startup_empty_frames = 1
+        self.manager.image_processor.take_screenshot.return_value = self.welcome()
+        def clicked(target):
+            self.manager._startup_pending_session = target
+            return True
+        with (
+            patch.object(self.manager, "_init_window_part_size", side_effect=[False, False, True]),
+            patch.object(self.manager, "_open_startup_session", side_effect=clicked) as open_session,
+            patch.object(self.manager, "_startup_title_matches", return_value=True),
+            patch("wechat_ai_bot.rpa.xfce_window_manager.time.sleep"),
+        ):
+            self.assertFalse(self.manager._init_startup_layout())
+            self.assertFalse(self.manager._startup_complete)
+            self.assertTrue(self.manager._init_startup_layout())
+            self.assertEqual(open_session.call_count, 1)
+
+    def test_search_clicks_exact_local_result_without_enter_or_send(self):
+        self.manager.window_id = "123"
+        self.manager.image_processor.take_screenshot.return_value = Image.new("RGB", (330, 90))
+        match = {"label": "文件传输助手", "pixel_bbox": [55, 40, 155, 60]}
+        for rows, expected in (([], False), ([{**match, "label": "文件传输助手打开"}], False),
+                               ([match, match], False), ([match], True)):
+            with self.subTest(rows=rows):
+                self.manager.ocr_processor.process_image.return_value = rows
+                with (
+                    patch.object(self.manager, "_active_window", return_value=types.SimpleNamespace(id="123")),
+                    patch("wechat_ai_bot.rpa.xfce_window_manager.set_clipboard_text", return_value=True),
+                    patch("wechat_ai_bot.rpa.xfce_window_manager.time.sleep"),
+                    patch("wechat_ai_bot.rpa.xfce_window_manager._run", return_value=DummyCompletedProcess()) as run,
+                ):
+                    self.assertEqual(self.manager._open_startup_session("文件传输助手"), expected)
+                    calls = [call.args for call in run.call_args_list]
+                    self.assertNotIn(("xdotool", "key", "Return"), calls)
+                    clicks = [call for call in calls if "click" in call]
+                    self.assertEqual(len(clicks), int(expected))
+                    if expected:
+                        self.assertNotIn(("xdotool", "key", "Escape"), calls)
+                        self.assertEqual(clicks[0], ("xdotool", "mousemove", "177", "135", "click", "1"))
+                    else:
+                        self.assertEqual(calls[-1], ("xdotool", "key", "Escape"))
+
+    def test_search_does_not_type_into_another_active_window(self):
+        self.manager.window_id = "123"
+        with (
+            patch.object(self.manager, "_active_window", return_value=types.SimpleNamespace(id="456")),
+            patch("wechat_ai_bot.rpa.xfce_window_manager._run") as run,
+        ):
+            self.assertFalse(self.manager._open_startup_session("文件传输助手"))
+            run.assert_not_called()
+
+    def test_initialization_waits_for_ui_lock(self):
+        from threading import Event, Thread
+        entered = Event()
+        with patch.object(self.manager, "_init_chat_window_locked", side_effect=lambda: entered.set()):
+            with self.manager.ui_lock:
+                worker = Thread(target=self.manager.init_chat_window)
+                worker.start()
+                self.assertFalse(entered.wait(0.05))
+            worker.join(2)
+            self.assertFalse(worker.is_alive())
+            self.assertTrue(entered.is_set())
 
 
 class XFCEWindowManagerTest(unittest.TestCase):

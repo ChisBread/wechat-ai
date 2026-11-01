@@ -1104,6 +1104,7 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
     ) -> str | list[TextContent | ImageContent]:
         """
         Get recent non-text messages with parsed media/file paths and decoded pictures.
+        Scans the latest max(limit * 10, 100) messages and returns matches chronologically.
         Returns JSON metadata first, followed by native MCP image blocks for vision models.
         image_content_index and quote_image_content_index map images to their content blocks.
         """
@@ -1119,15 +1120,17 @@ def create_app(user_info: UserInfo, config: dict, bot: Any = None) -> FastMCP:
                 }
             )
         bounded_limit = _bounded_int(limit, 20, 1, 100)
-        rows = _rows_for_contact(db, contact, max(bounded_limit * 3, bounded_limit))
+        rows = _rows_for_contact(db, contact, max(bounded_limit * 10, 100))
         messages = []
-        for row in rows:
+        # The helper returns chronological rows; select the newest media first.
+        for row in reversed(rows):
             local_type = row[2] if len(row) > 2 else None
             if local_type in (MessageType.Text, MessageType.Text2):
                 continue
             messages.append(_factory_message_payload(db, contact, row))
             if len(messages) >= bounded_limit:
                 break
+        messages.reverse()
         return _media_tool_result(
             {
                 "status": "ok",

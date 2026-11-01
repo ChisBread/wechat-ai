@@ -300,3 +300,35 @@ def test_text_handler_sends_only_after_confirmed_mention(confirmed, monkeypatch)
     else:
         sender.send_message.assert_not_called()
     window.close_all_windows.assert_called_once()
+
+
+def test_startup_navigation_cannot_overlap_action_handler(db, monkeypatch):
+    from threading import Event, RLock, Thread
+    entered, release, startup = Event(), Event(), Event()
+
+    def handle(action):
+        entered.set()
+        release.wait(2)
+        return False
+
+    controller = controller_for(db, SimpleNamespace(execute=handle), monkeypatch)
+    controller.window_manager.ui_lock = RLock()
+    worker = Thread(target=controller.execute_action, args=(SendTextMessageAction(content="hello", target="Alice"),))
+
+    def navigate():
+        with controller.window_manager.ui_lock:
+            startup.set()
+
+    initializer = Thread(target=navigate)
+    worker.start()
+    try:
+        assert entered.wait(2)
+        initializer.start()
+        assert not startup.wait(0.05)
+    finally:
+        release.set()
+        worker.join(2)
+        if initializer.ident is not None:
+            initializer.join(2)
+    assert not worker.is_alive()
+    assert startup.is_set()

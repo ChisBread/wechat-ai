@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import struct
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from PIL import Image
 
 
 DAT_V1_SIGNATURE = b"\x07\x08V1\x08\x07"
@@ -249,6 +251,7 @@ def decrypt_dat_bytes(
     media_type, extension = guess_image_type(decoded)
     if not media_type:
         raise WeChatDatError("decrypted DAT payload is not a supported image")
+    decoded = _strip_media_trailer(decoded, media_type)
     if not _is_complete_image_payload(decoded, media_type):
         raise WeChatDatError("decrypted DAT payload failed image integrity checks")
     return WeChatDatDecryptResult(
@@ -307,6 +310,133 @@ def guess_image_type(data: bytes) -> tuple[str, str]:
             continue
         return media_type, extension
     return "", ""
+
+
+_MAX_MEDIA_TRAILER_BYTES = 1024
+
+
+def _jpeg_payload_end(data: bytes) -> int | None:
+    """Walk JPEG segments/scans, skipping EOI bytes inside EXIF thumbnails."""
+    pos, in_scan, saw_scan = 2, False, False
+    while pos < len(data):
+        if in_scan:
+            pos = data.find(b"\xff", pos)
+            if pos < 0:
+                return None
+        elif data[pos] != 0xFF:
+            return None
+        while pos < len(data) and data[pos] == 0xFF:
+            pos += 1
+        if pos >= len(data):
+            return None
+        marker = data[pos]
+        pos += 1
+        if in_scan and (marker == 0 or 0xD0 <= marker <= 0xD7 or marker == 0x01):
+            continue  # Stuffed FF, restart marker, or TEM inside scan data.
+        if marker == 0xD9:
+            return pos if saw_scan else None
+        if marker in (0, 0xD8) or pos + 2 > len(data):
+            return None
+        size = int.from_bytes(data[pos:pos + 2], "big")
+        if size < 2 or pos + size > len(data):
+            return None
+        if marker == 0xE2 and data[pos + 2:pos + 6] == b"MPF\0":
+            # MPO/gain-map JPEGs can contain additional pictures after EOI.
+            # Leave these containers unchanged rather than discard their frames.
+            return None
+        pos += size
+        if marker == 0xDA:
+            in_scan = saw_scan = True
+        elif marker != 0xDC:  # DNL may appear inside an entropy-coded scan.
+            in_scan = False
+    return None
+
+
+def _png_payload_end(data: bytes) -> int | None:
+    """Find an actual IEND chunk, not marker bytes in another chunk's data."""
+    pos = 8
+    saw_idat = False
+    while pos + 12 <= len(data):
+        size = int.from_bytes(data[pos:pos + 4], "big")
+        kind = data[pos + 4:pos + 8]
+        end = pos + 12 + size
+        if end > len(data) or (pos == 8 and (kind != b"IHDR" or size != 13)):
+            return None
+        if kind == b"IEND":
+            return end if size == 0 and saw_idat and data[end - 4:end] == b"\xaeB`\x82" else None
+        saw_idat |= kind == b"IDAT"
+        pos = end
+    return None
+
+
+def _gif_payload_end(data: bytes) -> int | None:
+    """Skip GIF tables and sub-blocks so semicolons in frame data are ignored."""
+    if len(data) < 13 or data[:6] not in (b"GIF87a", b"GIF89a"):
+        return None
+    pos = 13
+    if data[10] & 0x80:
+        pos += 3 * (2 ** ((data[10] & 7) + 1))
+    saw_frame = False
+    while pos < len(data):
+        block = data[pos]
+        pos += 1
+        if block == 0x3B:
+            return pos if saw_frame else None
+        if block == 0x21:
+            pos += 1  # Extension label; the remaining payload uses sub-blocks.
+        elif block == 0x2C:
+            if pos + 9 > len(data):
+                return None
+            packed = data[pos + 8]
+            pos += 9
+            if packed & 0x80:
+                pos += 3 * (2 ** ((packed & 7) + 1))
+            pos += 1  # LZW minimum code size.
+            saw_frame = True
+        else:
+            return None
+        while pos < len(data):
+            size = data[pos]
+            pos += 1
+            if size == 0:
+                break
+            pos += size
+        else:
+            return None
+    return None
+
+
+def _strip_media_trailer(data: bytes, media_type: str) -> bytes:
+    """Remove bounded client metadata after a structurally complete image.
+
+    Some DAT payloads append a 24-byte tag/zero/hash trailer to JPEG data.
+    Locate the main image's end by its format structure, not rfind(): EXIF,
+    compressed data and the appended metadata can contain the same markers.
+    Validate the trimmed image without re-encoding or changing its resolution.
+    """
+    find_end = {
+        "image/jpeg": _jpeg_payload_end,
+        "image/png": _png_payload_end,
+        "image/gif": _gif_payload_end,
+    }.get(media_type)
+    if find_end is None:
+        return data
+    end = find_end(data)
+    if end is None or end == len(data):
+        return data
+    if len(data) - end > _MAX_MEDIA_TRAILER_BYTES:
+        raise WeChatDatError("decrypted DAT payload failed image integrity checks: media trailer exceeds 1024 bytes")
+    candidate = data[:end]
+    try:
+        with Image.open(io.BytesIO(candidate)) as image:
+            image.verify()
+        with Image.open(io.BytesIO(candidate)) as image:
+            for frame in range(getattr(image, "n_frames", 1)):
+                image.seek(frame)
+                image.load()
+    except (OSError, ValueError, SyntaxError, EOFError, Image.DecompressionBombError) as exc:
+        raise WeChatDatError("decrypted DAT payload failed image integrity checks: invalid image before trailer") from exc
+    return candidate
 
 
 def _is_complete_image_payload(data: bytes, media_type: str) -> bool:

@@ -4,6 +4,7 @@ import logging
 import re
 import subprocess
 import time
+from threading import RLock
 from pathlib import Path
 from typing import Any, Optional
 
@@ -60,6 +61,12 @@ class XFCEWindowManager:
         self.size_config = suggest_size(self.rpa_config)
         self.weixin_windows = {}
         self.current_window = None
+        # Shared with the controller for the entire visual action, including cleanup.
+        self.ui_lock = RLock()
+        self._startup_complete = False
+        self._startup_empty_frames = 0
+        self._startup_retry_at = 0.0
+        self._startup_pending_session = ""
         self.MSG_TOP_X = self.MSG_TOP_Y = self.MSG_WIDTH = self.MSG_HEIGHT = 0
         self.SIDE_BAR_WIDTH = self.SESSION_LIST_WIDTH = self.TITLE_BAR_HEIGHT = 0
         self.ROOM_SIDE_BAR_WIDTH = int(self.rpa_config.get("room_side_bar_width", 360))
@@ -483,7 +490,31 @@ class XFCEWindowManager:
         self.last_switch_session_time = None
         self.current_session_name = ""
 
+    def _invalidate_layout(self) -> None:
+        self.current_window = None
+        self.weixin_windows.pop("WeChat", None)
+        self.MSG_TOP_X = self.MSG_TOP_Y = self.MSG_WIDTH = self.MSG_HEIGHT = 0
+        self.SIDE_BAR_WIDTH = self.SESSION_LIST_WIDTH = self.TITLE_BAR_HEIGHT = 0
+        self.ICON_CONFIGS["send_button"]["position"] = None
+        self.window_aligned = False
+        self.last_window_state = "layout_unavailable"
+        self._clear_session_cache()
+
+    def _input_height_is_valid(self, height: int, input_top: int) -> bool:
+        layout_config = self.rpa_config.get("layout", {})
+        minimum = int(layout_config.get("min_input_height", 100))
+        maximum = int(layout_config.get("max_input_height", 200))
+        input_height = height - input_top
+        if not 0 < minimum <= input_height <= maximum < height:
+            self.logger.warning(
+                "Invalid WeChat input height: %s (expected %s..%s), input_top=%s",
+                input_height, minimum, maximum, input_top,
+            )
+            return False
+        return True
+
     def _set_current_layout(self, w: int, h: int) -> None:
+        self._startup_complete = True
         self.weixin_windows["WeChat"] = {
             "MSG_TOP_X": self.MSG_TOP_X,
             "MSG_TOP_Y": self.MSG_TOP_Y,
@@ -569,6 +600,10 @@ class XFCEWindowManager:
 
     def ensure_action_ready(self, action: Any = None) -> bool:
         """Normalize WeChat state before any visual RPA action."""
+        with self.ui_lock:
+            return self._ensure_action_ready_locked(action)
+
+    def _ensure_action_ready_locked(self, action: Any = None) -> bool:
         action_name = getattr(getattr(action, "action_type", None), "name", "")
         self.logger.info("Ensuring WeChat window state before RPA action: %s", action_name or "unknown")
         try:
@@ -594,7 +629,9 @@ class XFCEWindowManager:
                 return False
 
             geom = self._window_geometry(wid)
-            needs_relayout = not self.current_window
+            needs_relayout = not self.current_window or not self._input_height_is_valid(
+                h, self.MSG_TOP_Y + self.MSG_HEIGHT,
+            )
             if not self._geometry_matches_target(geom, w, h):
                 self.logger.warning(
                     "WeChat window drifted before RPA action: got %s, target=%sx%s",
@@ -609,6 +646,8 @@ class XFCEWindowManager:
                 _run("xdotool", "windowraise", wid)
                 _run("xdotool", "windowactivate", wid)
 
+            if needs_relayout:
+                self._invalidate_layout()
             time.sleep(self.window_show_delay)
             self.actual_window_geometry = geom or {}
             self.window_id = wid
@@ -625,6 +664,11 @@ class XFCEWindowManager:
                     self.last_window_state = "layout_unavailable"
                     self.window_aligned = False
                     return False
+                pending = self._startup_pending_session
+                if pending and not self._startup_title_matches(pending):
+                    self._invalidate_layout()
+                    return False
+                self._startup_pending_session = ""
                 self._set_current_layout(w, h)
 
             self.last_window_state = "ready"
@@ -673,7 +717,7 @@ class XFCEWindowManager:
         y_max: int,
         x_min: int,
         x_max: int,
-    ) -> int:
+    ) -> Optional[int]:
         pixels = screenshot.load()
         width, height = screenshot.size
         x_min = max(1, min(x_min, width - 2))
@@ -694,7 +738,9 @@ class XFCEWindowManager:
             if score > best_score:
                 best_score = score
                 best_y = y
-        return best_y
+        # A flat or nearly flat frame has no usable boundary. Returning y_min
+        # here turns a partially rendered window into a plausible cached layout.
+        return best_y if best_score >= 6 else None
 
     def _find_full_width_horizontal_boundary(
         self,
@@ -741,6 +787,10 @@ class XFCEWindowManager:
         return best_y
 
     def init_chat_window(self) -> bool:
+        with self.ui_lock:
+            return self._init_chat_window_locked()
+
+    def _init_chat_window_locked(self) -> bool:
         self.logger.info("Initializing chat window (Openbox/X11)...")
         try:
             if not subprocess.run(["pgrep", "-x", "wechat"], capture_output=True).stdout.strip():
@@ -800,7 +850,7 @@ class XFCEWindowManager:
                 self.logger.warning("Using target geometry without window manager confirmation")
 
             time.sleep(self.scroll_delay)
-            if self._init_window_part_size():
+            if self._init_startup_layout():
                 self._set_current_layout(w, h)
                 self.last_window_state = "ready"
                 return True
@@ -808,7 +858,145 @@ class XFCEWindowManager:
         except Exception as e:
             self.logger.error(f"init error: {e}"); return False
 
+    @staticmethod
+    def _startup_label(text: str) -> str:
+        return "".join(str(text).split()).casefold()
+
+    def _empty_startup_pane(self, screenshot) -> Optional[int]:
+        """Recognize the light-theme welcome pane, not just a missing editor.
+
+        Require a populated session list and the centered grey watermark on an
+        otherwise uniform pane. Login screens, blank frames and overlays fail.
+        Unknown themes/scales remain unready rather than triggering navigation.
+        """
+        w, h = screenshot.size
+        if w < 600 or h < 500:
+            return None
+        left = self._find_vertical_boundary(screenshot, 260, 380, 40, h - 40)
+        pixels = screenshot.load()
+        background = pixels[w - 20, 120][:3]
+        if min(background) < 230 or max(background) - min(background) > 8:
+            return None
+        cx, cy = (left + w) // 2, (32 + h) // 2
+        marker = outside = changed = 0
+        for y in range(40, h - 8, 8):
+            for x in range(left + 8, w - 8, 8):
+                rgb = pixels[x, y][:3]
+                diff = max(abs(int(rgb[i]) - int(background[i])) for i in range(3))
+                if abs(x - cx) <= 65 and abs(y - cy) <= 55:
+                    marker += diff >= 12 and max(rgb) - min(rgb) < 8
+                else:
+                    outside += 1
+                    changed += diff > 8
+        if not 15 <= marker <= 150 or not outside or changed / outside > 0.002:
+            return None
+        rows = self.ocr_processor.process_image(image=screenshot.crop((65, 35, left, min(h, 650))))
+        search_visible = any(
+            # OCR can join the magnifying-glass icon to the placeholder as Q.
+            self._startup_label(row.get("label", "")) in {"搜索", "search", "q搜索", "qsearch"}
+            and row.get("pixel_bbox", [0, 999])[1] < 40 for row in rows
+        )
+        session_visible = any(
+            row.get("label", "").strip() and row.get("pixel_bbox", [0, 0])[1] > 50
+            for row in rows
+        )
+        return left if search_visible and session_visible else None
+
+    def _startup_title_matches(self, target: str) -> bool:
+        left = self.MSG_TOP_X
+        shot = self.image_processor.take_screenshot(
+            region=[left + 10, 35, self.size_config.width - left - 20, 45],
+        )
+        if shot is None:
+            return False
+        rows = self.ocr_processor.process_image(image=shot)
+        return any(self._startup_label(row.get("label", "")) == self._startup_label(target)
+                   for row in rows)
+
+    def _open_startup_session(self, target: str) -> bool:
+        """Click an exact match in the first local result, never press Enter."""
+        active = self._active_window()
+        if not active or active.id != self.window_id:
+            return False
+        search_started = selected = False
+        try:
+            if _run("xdotool", "key", "ctrl+f").returncode:
+                return False
+            search_started = True
+            time.sleep(self.action_delay)
+            if not set_clipboard_text(target):
+                return False
+            if _run("xdotool", "key", "ctrl+a").returncode:
+                return False
+            if _run("xdotool", "key", "ctrl+v").returncode:
+                return False
+            time.sleep(max(self.switch_contact_delay, 0.5))
+            # Exclude the search field and web suggestions below the local result.
+            region = [72, 85, 330, 90]
+            shot = self.image_processor.take_screenshot(region=region)
+            if shot is None:
+                return False
+            matches = [row for row in self.ocr_processor.process_image(image=shot)
+                       if self._startup_label(row.get("label", "")) == self._startup_label(target)]
+            if len(matches) != 1:
+                self.logger.warning("Startup session search has no unique exact local match")
+                return False
+            x1, y1, x2, y2 = matches[0]["pixel_bbox"]
+            if not (0 <= x1 < x2 <= region[2] and 0 <= y1 < y2 <= region[3]):
+                return False
+            result = _run("xdotool", "mousemove", str(int(region[0] + (x1 + x2) / 2)),
+                          str(int(region[1] + (y1 + y2) / 2)), "click", "1")
+            if result.returncode:
+                return False
+            selected = True
+            self._startup_pending_session = target
+            self.logger.info("Opened startup session candidate; waiting for title and layout verification")
+            return True
+        finally:
+            # Once a result opens, Escape hides the main WeChat window.
+            if search_started and not selected:
+                _run("xdotool", "key", "Escape")
+
+    def _init_startup_layout(self) -> bool:
+        valid = self._init_window_part_size()
+        if valid:
+            pending = self._startup_pending_session
+            if pending and not self._startup_title_matches(pending):
+                self.logger.warning("Startup session title is not confirmed yet")
+                self._invalidate_layout()
+                return False
+            self._startup_pending_session = ""
+            self._startup_empty_frames = 0
+            return True
+        target = str(self.rpa_config.get("layout", {}).get("startup_session", "文件传输助手") or "").strip()
+        if self._startup_complete or not target or any(c in target for c in "\r\n\t"):
+            return False
+        if time.monotonic() < self._startup_retry_at:
+            return False
+        shot = self.image_processor.take_screenshot(
+            region=[0, 0, self.size_config.width, self.size_config.height],
+        )
+        if shot is None or self._empty_startup_pane(shot) is None:
+            self._startup_empty_frames = 0
+            return False
+        self._startup_empty_frames += 1
+        if self._startup_empty_frames < 2:
+            return False
+        self._startup_empty_frames = 0
+        self._startup_retry_at = time.monotonic() + 15
+        if not self._open_startup_session(target):
+            return False
+        time.sleep(max(self.window_show_delay, 0.5))
+        # Search keystrokes/clicks are not proof that a chat was opened.
+        if self._init_window_part_size() and self._startup_title_matches(target):
+            self._startup_pending_session = ""
+            return True
+        self._invalidate_layout()
+        return False
+
     def _init_window_part_size(self) -> bool:
+        # Never leave a previous layout usable after a failed reinitialization.
+        self._invalidate_layout()
         w, h = self.size_config.width, self.size_config.height
         self.logger.info(f"Initializing Linux WeChat layout from {w}x{h} screenshot...")
 
@@ -822,15 +1010,11 @@ class XFCEWindowManager:
         if session_right <= sidebar + 180:
             session_right = min(w - 300, sidebar + 265)
 
-        self.SIDE_BAR_WIDTH = sidebar
-        self.SESSION_LIST_WIDTH = session_right - sidebar
-        self.MSG_TOP_X = session_right
-
         title_bottom = self._find_full_width_horizontal_boundary(
             screenshot,
             52,
             82,
-            self.MSG_TOP_X + 10,
+            session_right + 10,
             w - 10,
             diff_threshold=8,
             min_strong_ratio=0.45,
@@ -841,46 +1025,55 @@ class XFCEWindowManager:
                 screenshot,
                 52,
                 82,
-                self.MSG_TOP_X + 10,
+                session_right + 10,
                 w - 10,
             )
-        if not 52 <= title_bottom <= 82:
-            title_bottom = 70
-        self.TITLE_BAR_HEIGHT = title_bottom
-        self.MSG_TOP_Y = title_bottom
+        if title_bottom is None or not 52 <= title_bottom <= 82:
+            self.logger.warning("WeChat title boundary is not ready")
+            return False
 
         input_top = self._find_full_width_horizontal_boundary(
             screenshot,
-            max(self.MSG_TOP_Y + 200, h - 360),
+            max(title_bottom + 200, h - 360),
             h - 80,
-            self.MSG_TOP_X + 10,
+            session_right + 10,
             w - 10,
         )
         if input_top is None:
             input_top = self._find_horizontal_boundary(
                 screenshot,
-                max(self.MSG_TOP_Y + 200, h - 360),
+                max(title_bottom + 200, h - 360),
                 h - 80,
-                self.MSG_TOP_X + 10,
+                session_right + 10,
                 w - 10,
             )
-        if input_top <= self.MSG_TOP_Y + 200:
-            input_top = h - 150
+        if input_top is None:
+            self.logger.warning("WeChat input boundary is not ready")
+            return False
+        if not self._input_height_is_valid(h, input_top):
+            return False
 
-        self.MSG_WIDTH = w - self.MSG_TOP_X
-        self.MSG_HEIGHT = input_top - self.MSG_TOP_Y
-        configured_room_sidebar_width = int(self.rpa_config.get("room_side_bar_width", 360))
-        self.ROOM_SIDE_BAR_WIDTH = max(260, min(configured_room_sidebar_width, w // 2))
-        if self.MSG_WIDTH < 300 or self.MSG_HEIGHT < 300:
+        msg_width = w - session_right
+        msg_height = input_top - title_bottom
+        if msg_width < 300 or msg_height < 300:
             self.logger.error(
                 "Invalid WeChat layout: msg region %sx%s at %s,%s",
-                self.MSG_WIDTH,
-                self.MSG_HEIGHT,
-                self.MSG_TOP_X,
-                self.MSG_TOP_Y,
+                msg_width,
+                msg_height,
+                session_right,
+                title_bottom,
             )
             return False
 
+        # Publish geometry only after every check succeeds.
+        self.SIDE_BAR_WIDTH = sidebar
+        self.SESSION_LIST_WIDTH = session_right - sidebar
+        self.MSG_TOP_X = session_right
+        self.TITLE_BAR_HEIGHT = self.MSG_TOP_Y = title_bottom
+        self.MSG_WIDTH = msg_width
+        self.MSG_HEIGHT = msg_height
+        configured_room_sidebar_width = int(self.rpa_config.get("room_side_bar_width", 360))
+        self.ROOM_SIDE_BAR_WIDTH = max(260, min(configured_room_sidebar_width, w // 2))
         send = [
             max(self.MSG_TOP_X + 80, w - 116),
             max(input_top + 20, h - 50),

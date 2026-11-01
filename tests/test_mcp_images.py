@@ -6,6 +6,7 @@ import pytest
 
 from wechat_ai_bot.mcp.app import create_app
 from wechat_ai_bot.models import UserInfo
+from wechat_ai_bot.weixin.message_classes import MessageType
 from tests.test_debug_routes import DummyConfig, DummyMediaBot
 from tests.test_image_media import png
 
@@ -75,3 +76,39 @@ def test_multiple_image_messages_map_to_correct_content_blocks(tmp_path, tool):
         assert message['image_content_index'] == index
         assert base64.b64decode(result[index].data) == image
         assert 'base64' not in message
+
+
+@pytest.mark.parametrize('media_ids, total, limit, expected', [
+    ([1, 3, 5], 6, 2, [3, 5]),
+    ([1, 3, 5], 6, 1, [5]),
+    ([1, 3, 5], 6, 10, [1, 3, 5]),
+    ([10, 20, 30], 100, 2, [20, 30]),
+    ([], 100, 2, []),
+])
+def test_recent_media_selects_latest_before_chronological_output(
+    tmp_path, media_ids, total, limit, expected,
+):
+    bot = DummyMediaBot(tmp_path)
+    template = bot.database_service._image_row()
+    rows = []
+    for local_id in range(1, total + 1):
+        row = list(template)
+        row[0] = row[3] = local_id
+        row[1] = 1000 + local_id
+        row[5] = template[5] + local_id
+        if local_id not in media_ids:
+            row[2] = MessageType.Text if local_id % 2 else MessageType.Text2
+            row[12] = 'text message'
+        rows.append(tuple(row))
+
+    def get_messages(username, count=10, order='desc'):
+        return sorted(rows, key=lambda row: row[3], reverse=order == 'desc')[:count]
+
+    bot.database_service.get_messages_by_username = get_messages
+    app = create_app(UserInfo(account='me'), DummyConfig({'debug': {'enabled': False}}), bot=bot)
+    result = asyncio.run(app.call_tool('get_recent_media_messages', {
+        'contact_name': 'media', 'limit': limit,
+    }))
+    data = json.loads(result[0].text)
+    assert data['count'] == len(expected)
+    assert [message['local_id'] for message in data['messages']] == expected
