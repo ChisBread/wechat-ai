@@ -226,3 +226,34 @@ def test_dat_trailer_does_not_force_thumbnail_fallback(tmp_path, tier):
     assert payload.get('media_fallback_reason') != 'higher_resolution_unavailable'
     assert 'media_fallback_errors' not in payload
     assert base64.b64decode(payload['base64']) == response.body == image
+
+
+def test_wxgf_placeholder_frame_is_skipped():
+    ffmpeg = shutil.which('ffmpeg')
+    if not ffmpeg:
+        pytest.skip('ffmpeg not installed')
+    output = ['-c:v', 'libx265', '-x265-params', 'pools=1:frame-threads=1:log-level=error',
+              '-f', 'hevc', 'pipe:1']
+
+    def encode(two_frames):
+        args = [ffmpeg, '-v', 'error', '-f', 'lavfi', '-i', 'color=c=white:s=64x48:r=1:d=1']
+        if two_frames:
+            args += ['-f', 'lavfi', '-i', 'testsrc2=s=64x48:r=1:d=1',
+                     '-filter_complex', '[0:v][1:v]concat=n=2:v=1[out]', '-map', '[out]',
+                     '-frames:v', '2']
+        else:
+            args += ['-frames:v', '1']
+        args += output
+        process = subprocess.run(args, capture_output=True, timeout=30)
+        assert process.returncode == 0, process.stderr.decode()
+        return process.stdout
+
+    def present(stream):
+        result = present_dat_image(decrypt_dat_bytes(b'wxgf' + b'\0' * 20 + stream))
+        return Image.open(io.BytesIO(result.data)).convert('L')
+
+    # A single-frame WXGF keeps the legacy first-frame behaviour (blank here).
+    assert present(encode(False)).getextrema() == (255, 255)
+    # When a blank placeholder frame is followed by the real picture, the
+    # detailed frame must be selected instead of the first one.
+    assert present(encode(True)).getextrema() != (255, 255)
